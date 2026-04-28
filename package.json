@@ -1,0 +1,96 @@
+{
+  "name": "production-buddy",
+  "productName": "Production Buddy",
+  "version": "1.0.0",
+  "description": "Apply marked-up PDF edits to InDesign / Illustrator documents with automated production QA + 508 checks",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg zip",
+    "build:arm64": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg zip --arm64",
+    "build:x64": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg zip --x64",
+    "release": "node release.js",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FillThatPDF/ProductionBuddy-releases.git"
+  },
+  "author": "Production Buddy",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "dependencies": {
+    "electron-log": "^5.4.3",
+    "electron-updater": "^6.1.7"
+  },
+  "build": {
+    "appId": "com.productionbuddy.app",
+    "productName": "Production Buddy",
+    "asar": true,
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "assets/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "artifactName": "ProductionBuddy-${version}-${arch}.${ext}",
+      "identity": null,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "Production Buddy ${version}",
+      "icon": "assets/icon.icns",
+      "artifactName": "ProductionBuddy-${version}-${arch}.${ext}",
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "FillThatPDF",
+      "repo": "ProductionBuddy-releases"
+    },
+    "files": [
+      "*.js",
+      "*.json",
+      "*.html",
+      "*.css",
+      "assets/**/*",
+      "!assets/build_icon.py",
+      "!assets/icon.iconset/**/*",
+      "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp}",
+      "!**/._*",
+      "!**/.DS_Store"
+    ],
+    "extraResources": [
+      {
+        "from": "python",
+        "to": "python",
+        "filter": [
+          "**/*.py"
+        ]
+      },
+      {
+        "from": "jsx",
+        "to": "jsx",
+        "filter": [
+          "**/*.jsx"
+        ]
+      }
+    ]
+  }
+}

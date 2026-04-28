@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Production Buddy</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div class="header-row">
+        <div>
+          <h1>Production Buddy</h1>
+        </div>
+        <button id="settingsBtn" class="settings-btn" title="Settings">⚙</button>
+      </div>
+    </header>
+
+    <div class="step">
+      <label>① Marked-up PDF</label>
+      <div class="pick-row">
+        <input id="pdfPath" type="text" readonly placeholder="No file selected…" />
+        <button id="pickPdf">Browse…</button>
+      </div>
+    </div>
+
+    <div class="step">
+      <label>② Source Document (.indd or .ai)</label>
+      <div class="pick-row">
+        <input id="inddPath" type="text" readonly placeholder="No file selected…" />
+        <button id="pickIndd">Browse…</button>
+      </div>
+      <p class="hint">InDesign documents and Illustrator artwork are both supported. The app auto-detects which engine to run based on the file extension.</p>
+    </div>
+
+    <div class="step">
+      <label>③ Output Folder <span class="optional">(optional — defaults to .indd's folder)</span></label>
+      <div class="pick-row">
+        <input id="outDir" type="text" readonly placeholder="Same folder as the .indd by default" />
+        <button id="pickOut">Browse…</button>
+      </div>
+    </div>
+
+    <div class="step">
+      <label>④ Reference files <span class="optional">(optional)</span></label>
+      <p class="hint">Other assets the markup references — .indd, .pdf, .ai, .psd, images. The app will match them to the appropriate annotation and append/place them automatically.</p>
+      <div id="refFilesList" class="ref-files-list"></div>
+      <div class="pick-row">
+        <button id="addRefFile">+ Add file…</button>
+      </div>
+    </div>
+
+    <div class="step">
+      <label class="check-row">
+        <input type="checkbox" id="run508Check" />
+        <span>508 compliance check</span>
+      </label>
+      <p class="hint">When on, runs Section 508 designer-side checks: text-vs-background color contrast (≥ 4.5:1), line weights ≥ 1pt, alt text on images, document title/author/subject/keywords, and forces "Create Tagged PDF" on export. Findings appear alongside the regular QA results.</p>
+    </div>
+
+    <div class="actions">
+      <button id="runBtn" class="primary" disabled>Extract & Apply Edits</button>
+    </div>
+
+    <div id="progress" class="panel progress hidden">
+      <h3>Progress</h3>
+      <div class="progress-bar-wrapper">
+        <div class="progress-bar"><div class="progress-bar-fill" id="progressBarFill"></div></div>
+        <div class="progress-step" id="progressStep">Starting…</div>
+      </div>
+      <details class="log-details">
+        <summary>Show full log</summary>
+        <pre id="progressLog"></pre>
+      </details>
+    </div>
+
+    <div id="findings" class="panel findings hidden">
+      <h3>QA Findings</h3>
+      <div id="summaryBar" class="summary-bar"></div>
+      <div class="filter-row">
+        <label><input type="checkbox" id="filtErr" checked /> Errors</label>
+        <label><input type="checkbox" id="filtWarn" checked /> Warnings</label>
+        <label><input type="checkbox" id="filtInfo" /> Info</label>
+        <label><input type="checkbox" id="hideResolved" checked /> Hide resolved</label>
+        <label><input type="checkbox" id="hideIgnored" checked /> Hide ignored</label>
+      </div>
+      <div id="findingsList"></div>
+    </div>
+
+    <div id="result" class="panel result hidden">
+      <h3>Output</h3>
+      <p>Edited InDesign: <a id="outIndd" href="#">—</a></p>
+      <p>Exported PDF: <a id="outPdf" href="#">—</a></p>
+    </div>
+  </div>
+
+  <!-- Settings modal -->
+  <div id="settingsModal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <h2>Settings</h2>
+        <button class="close-btn" id="closeSettings" title="Close">×</button>
+      </div>
+      <div class="modal-body">
+
+        <section class="settings-section">
+          <h4>Classifier cascade</h4>
+          <p class="settings-hint">Determines how natural-language markup is translated into edit operations.</p>
+          <label class="check-row"><input type="checkbox" id="setUseRules" checked disabled /> Rule-based local matcher (always on)</label>
+          <label class="check-row"><input type="checkbox" id="setUseOllama" /> Use Ollama for unresolved annotations</label>
+          <div class="setting-row">
+            <label>Ollama model</label>
+            <input type="text" id="setOllamaModel" placeholder="llama3.1:8b" />
+            <button id="detectOllamaModels" class="secondary" title="List installed models">↻</button>
+          </div>
+          <p class="settings-hint" id="ollamaModelsHint">Default: <code>llama3.1:8b</code>. To use a different model, type its tag (e.g. <code>qwen2.5:7b</code>, <code>llama3.2:3b</code>) and pull it via <code>ollama pull &lt;model&gt;</code>. Click ↻ to list installed models.</p>
+          <div class="setting-row" style="margin-top:8px">
+            <span id="ollamaStatus" class="settings-hint" style="flex:1">Checking Ollama…</span>
+            <button id="installOllamaBtn" class="secondary">Install / Update Ollama</button>
+          </div>
+          <p class="settings-hint">The app auto-applies confident edits and routes anything ambiguous to HUMAN_REVIEW automatically.</p>
+        </section>
+
+        <section class="settings-section">
+          <h4>QA thresholds</h4>
+          <div class="setting-row">
+            <label>Image min DPI</label>
+            <input type="number" id="setMinDpi" min="72" max="600" step="10" value="300" />
+          </div>
+          <div class="setting-row">
+            <label>Max distinct fonts before flagging</label>
+            <input type="number" id="setMaxFonts" min="1" max="20" step="1" value="4" />
+          </div>
+          <div class="setting-row">
+            <label>Max body-text size for rich-black warning</label>
+            <input type="number" id="setBodySize" min="6" max="20" step="1" value="14" />
+            <span class="setting-unit">pt</span>
+          </div>
+          <p class="settings-hint">Text at or below this size is considered "body text" — the app flags it if it uses rich black (any C/M/Y combined with K=100), which registers poorly on press for small letters. Headlines and large display text are unaffected.</p>
+        </section>
+
+        <section class="settings-section">
+          <h4>QA checks enabled</h4>
+          <p class="settings-hint">Disable any checks that are noisy for your workflow.</p>
+          <div class="check-grid" id="checkToggles"></div>
+        </section>
+
+        <section class="settings-section">
+          <h4>Output behavior</h4>
+          <label class="check-row"><input type="checkbox" id="setAutoRelink" checked /> Auto-relink missing assets when found in Box (re-exports PDF after relink)</label>
+          <label class="check-row"><input type="checkbox" id="setAutoActivateFonts" checked /> Auto-activate missing fonts via FontExplorer X Pro (re-exports PDF after activation)</label>
+          <label class="check-row"><input type="checkbox" id="setAutoOpenPdf" checked /> Open exported PDF when complete</label>
+          <label class="check-row"><input type="checkbox" id="setAutoOpenIndd" /> Open edited .indd when complete</label>
+          <label class="check-row"><input type="checkbox" id="setShowInfoFindings" /> Show info-severity findings by default</label>
+        </section>
+
+        <section class="settings-section">
+          <h4>Cache</h4>
+          <p class="settings-hint">Each run writes intermediate logs and JSON to <code>~/Library/Caches/indesign-editor/</code> for debugging. Older runs are pruned automatically.</p>
+          <div class="setting-row">
+            <label>Keep last N runs</label>
+            <input type="number" id="setCacheRetention" min="1" max="100" step="1" value="10" />
+          </div>
+          <button id="clearCache" class="secondary">Clear cache now</button>
+        </section>
+
+        <section class="settings-section">
+          <h4>Ignored findings</h4>
+          <p class="settings-hint">Findings with these IDs will be hidden in future runs.</p>
+          <div id="ignoredList" class="ignored-list">No ignored findings.</div>
+          <button id="clearIgnored" class="secondary">Clear all</button>
+        </section>
+
+      </div>
+      <div class="modal-foot">
+        <button class="ghost" id="resetSettings">Reset to defaults</button>
+        <button class="primary" id="saveSettings">Save &amp; Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- First-run Ollama setup popup -->
+  <div id="ollamaSetupModal" class="modal-overlay hidden">
+    <div class="modal" style="max-width: 560px">
+      <div class="modal-head">
+        <h2>Welcome to Production Buddy</h2>
+      </div>
+      <div class="modal-body">
+        <p>Production Buddy uses a small <strong>local AI model</strong> (Ollama) to interpret less-obvious PDF markup — things like "add a check mark to the row above" or "delete this print ads line". Everything runs on your machine — no data leaves your computer, no subscription, no API keys.</p>
+        <p style="opacity:0.75; font-size:13px">It's a one-time ~5 GB download. You can also skip this and the app will still handle the most common edits using built-in pattern matching.</p>
+
+        <div class="ollama-choice-row">
+          <div class="ollama-choice">
+            <button class="primary" id="ollamaInstallBtn">Set up Ollama</button>
+            <p class="settings-hint">Opens the official Ollama download page in your browser. After installing, return here and the app will detect it automatically.</p>
+          </div>
+          <div class="ollama-choice">
+            <button class="ghost" id="ollamaSkipBtn">Skip for now</button>
+            <p class="settings-hint">The app will use rule-based matching only. Common edits (replace text, sort table, add row) still work; ambiguous notes will land in "Human Review" for you to handle. You can install Ollama later from the Settings panel.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast notification -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

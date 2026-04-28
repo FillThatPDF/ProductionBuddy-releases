@@ -1,0 +1,839 @@
+#!/usr/bin/env python3
+"""Main orchestrator for InDesignEditor v0.2.
+
+Pipeline:
+  1. Extract annotations from marked-up PDF (PyMuPDF)
+  2. Inspect .indd structure via ExtendScript → JSON
+  3. Send annotations + inspection to Claude API → structured edit list
+  4. Generate apply_edits_v2.jsx with paths + edits.json reference
+  5. Run via osascript → InDesign
+  6. Run Python-side QA checks (hyperlinks reachability, spellcheck)
+  7. Merge findings into findings.json
+
+Reads JSON payload from argv[1]: { pdfPath, inddPath, outputDir }.
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+
+DEFAULT_CACHE_RETENTION = 10  # default — overridable via settings.cacheRetention
+
+
+def get_work_dir(output_dir, indd_path, cache_retention=DEFAULT_CACHE_RETENTION):
+    """Return a per-run scratch dir under ~/Library/Caches/indesign-editor/.
+
+    Intermediate artifacts (logs, generated JSX, JSON dumps, findings) live
+    here so the user's job folder stays clean — only the .indd and .pdf
+    deliverables end up in output_dir. The dir name embeds the source
+    basename + a timestamp so consecutive runs don't collide and old runs
+    are easy to spot for debugging.
+
+    Also prunes older runs in the cache root, keeping the most recent
+    `cache_retention` entries.
+    """
+    cache_root = Path.home() / "Library" / "Caches" / "indesign-editor"
+    cache_root.mkdir(parents=True, exist_ok=True)
+    prune_old_runs(cache_root, max(1, int(cache_retention or DEFAULT_CACHE_RETENTION)))
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    safe_base = re.sub(r"[^\w.-]+", "_", Path(indd_path).stem)[:60]
+    work = cache_root / f"{stamp}_{safe_base}"
+    work.mkdir(parents=True, exist_ok=True)
+    return work
+
+
+def prune_old_runs(cache_root, keep):
+    """Keep the `keep` most-recent run dirs in cache_root; delete the rest.
+
+    Sorts subdirs by mtime descending. We use mtime (not name) so manual
+    folder renames don't mess up the order.
+    """
+    try:
+        runs = [p for p in cache_root.iterdir() if p.is_dir()]
+        runs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in runs[keep:]:
+            try:
+                shutil.rmtree(old)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+HERE = Path(__file__).parent
+JSX_DIR = HERE.parent / "jsx"
+
+# Engine selection: detected per-run from the source file extension.
+# .indd → InDesignEngine, .ai → IllustratorEngine. The engine supplies the
+# AppleScript app name + JSX template paths.
+sys.path.insert(0, str(HERE))
+from engines import get_engine  # noqa: E402
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def bump_version(base_name):
+    """Detect a `_v##` (or `-v##`, etc.) suffix and increment the number.
+    Preserves zero-padding width. Falls back to '<base>_AI_EDITED' if no version pattern.
+
+    Examples:
+      57985_..._v06        → 57985_..._v07
+      My_Doc_v9            → My_Doc_v10
+      foo-V3               → foo-V4 (case preserved)
+      foo (no version)     → foo_AI_EDITED
+    """
+    m = re.search(r"([_\-\s])(v|V)(\d+)\s*$", base_name)
+    if not m:
+        return base_name + "_AI_EDITED"
+    sep, v, num_str = m.group(1), m.group(2), m.group(3)
+    width = len(num_str)
+    new_num = int(num_str) + 1
+    new_num_str = str(new_num).zfill(width) if width > 1 else str(new_num)
+    return base_name[:m.start()] + sep + v + new_num_str
+
+
+def extract_annotations(pdf_path):
+    """Extract sticky-note annotations from the marked-up PDF and, for each,
+    capture what text is *near* the annotation's icon so we can detect the
+    common reviewer convention: 'put a sticky note next to a word containing
+    only the replacement text'.
+
+    Returns each annotation with:
+      page, rect, type, content,
+      nearby_text       — the closest word(s) to the icon
+      nearby_text_rect  — bbox of that text in the PDF
+      line_text         — full line containing the nearby text
+    """
+    import fitz
+    doc = fitz.open(pdf_path)
+    annotations = []
+    for page_idx, page in enumerate(doc):
+        # Pre-fetch all words on the page once, with positions
+        words = page.get_text("words")  # (x0, y0, x1, y1, "word", block_no, line_no, word_no)
+        for a in page.annots() or []:
+            atype = a.type[1] if a.type else ""
+            content = (a.info.get("content") or "").strip()
+            r = a.rect
+
+            # ---- Strikethrough / underline / highlight: extract underlying text ----
+            # These annotations carry quad points (vertices) describing the
+            # exact regions of text the marker covers — multiple per annotation
+            # if the markup spans multiple lines. We extract text from each quad
+            # and concatenate; gives us the actual marked text, not the whole
+            # paragraph rect.
+            if atype in ("StrikeOut", "Underline", "Squiggly", "Highlight"):
+                marked_text = ""
+                try:
+                    quads = a.vertices  # list of (x, y) tuples — 4 per quad
+                    if quads and len(quads) % 4 == 0:
+                        bits = []
+                        import fitz as _fitz
+                        for q in range(0, len(quads), 4):
+                            pts = quads[q:q+4]
+                            xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+                            sub_rect = _fitz.Rect(min(xs), min(ys), max(xs), max(ys))
+                            t = page.get_textbox(sub_rect).strip()
+                            if t: bits.append(t)
+                        marked_text = " ".join(bits).strip()
+                except Exception:
+                    pass
+                if not marked_text:
+                    # Fallback: use words intersecting the rect
+                    bits = []
+                    for w in words:
+                        if w[0] >= r.x0 - 1 and w[2] <= r.x1 + 1 and w[1] >= r.y0 - 2 and w[3] <= r.y1 + 2:
+                            bits.append(w[4])
+                    marked_text = " ".join(bits).strip()
+                # Clean up control characters PyMuPDF sometimes inserts (BEL etc.)
+                marked_text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]+", "", marked_text)
+                # Collapse multiple whitespace
+                marked_text = re.sub(r"\s+", " ", marked_text).strip()
+                if marked_text:
+                    annotations.append({
+                        "page": page_idx + 1,
+                        "rect": [round(x, 2) for x in r],
+                        "type": atype,
+                        "content": "",  # no comment text
+                        "marked_text": marked_text,
+                        "nearby_text": None,
+                        "nearby_rect": None,
+                        "line_text": None,
+                    })
+                continue
+
+            if not content:
+                continue
+            cx = (r.x0 + r.x1) / 2
+            cy = (r.y0 + r.y1) / 2
+
+            # Find nearest word(s). Bias: same horizontal line as icon, prefer words to the LEFT
+            # (reviewers typically place sticky-note icons after the word being commented on).
+            line_height_band = 14  # pt
+            same_line = []
+            for w in words:
+                x0, y0, x1, y1, t = w[0], w[1], w[2], w[3], w[4]
+                if not t.strip():
+                    continue
+                wcy = (y0 + y1) / 2
+                if abs(wcy - cy) > line_height_band:
+                    continue
+                # Distance from word's right edge to icon (negative if word is to the right of icon)
+                gap = cx - x1
+                same_line.append({"text": t, "rect": [x0, y0, x1, y1], "gap": gap, "block": w[5], "line": w[6]})
+
+            nearby_text = None
+            nearby_rect = None
+            line_text = None
+            if same_line:
+                # Words on this line that come BEFORE the icon (preferred)
+                left_of = [w for w in same_line if w["gap"] >= -5]
+                left_of.sort(key=lambda w: w["gap"])  # smallest positive gap first (closest to icon)
+                pick = left_of[0] if left_of else same_line[0]
+                nearby_text = pick["text"]
+                nearby_rect = pick["rect"]
+                # Reconstruct the full line
+                line_words = [w for w in same_line if w["block"] == pick["block"] and w["line"] == pick["line"]]
+                line_words.sort(key=lambda w: w["rect"][0])
+                line_text = " ".join(w["text"] for w in line_words).strip()
+
+            annotations.append({
+                "page": page_idx + 1,
+                "rect": [round(x, 2) for x in r],
+                "type": a.type[1],
+                "content": content,
+                "nearby_text": nearby_text,
+                "nearby_rect": nearby_rect,
+                "line_text": line_text,
+            })
+    return annotations
+
+
+def render_template(template_path, replacements, out_path):
+    src = Path(template_path).read_text()
+    for old, new in replacements.items():
+        src = src.replace(old, new)
+    issues = scan_jsx_for_hazards(src)
+    if issues:
+        for line_no, kind, snippet in issues:
+            log(f"[orchestrate] JSX hazard ({kind}) at line {line_no}: {snippet[:80]}")
+        # Hard-fail on hazards that would silently break the script in
+        # ExtendScript. SyntaxError-class issues should never reach the user.
+        raise RuntimeError(
+            f"JSX template {Path(template_path).name} has {len(issues)} parser hazard(s); "
+            "see log above. Fix at the JSX source — do not paper over with try/catch."
+        )
+    Path(out_path).write_text(src)
+
+
+# ----- JSX safety scans --------------------------------------------------
+
+# Bytes that are valid in UTF-8 but break ExtendScript regex/string literals
+# when they appear *literally* in source (rather than as \xNN / \uNNNN escapes).
+# NUL (0x00) is the worst offender: most parsers treat it as end-of-input
+# inside a regex literal, silently truncating the regex.
+_JSX_HAZARD_BYTES = {
+    0x00: "NUL byte (ends regex literal in ExtendScript)",
+    0xFE: "literal byte 0xFE (often part of stray UTF-16 BOM)",
+    0xFF: "literal byte 0xFF (often part of stray UTF-16 BOM)",
+}
+
+
+def scan_jsx_for_hazards(src):
+    """Return list of (line_no, kind, line) for lines that contain bytes or
+    patterns known to silently break ExtendScript parsing.
+
+    We focus on hazards that would cause the JSX to throw SyntaxError at
+    parse time (which gets caught by an enclosing try/catch and silently
+    breaks downstream features) rather than runtime errors.
+    """
+    issues = []
+    for i, line in enumerate(src.splitlines(), 1):
+        # Hazard 1: literal NUL / 0xFE / 0xFF bytes anywhere in the line.
+        for ch in line:
+            code = ord(ch)
+            if code in _JSX_HAZARD_BYTES:
+                issues.append((i, _JSX_HAZARD_BYTES[code], line))
+                break
+        # Hazard 2: regex literal containing the BOM (U+FEFF) literally.
+        # The BOM in a /.../ class doesn't break parsing on its own but it
+        # ALMOST ALWAYS appears next to other control bytes that DO break it,
+        # and is a strong signal someone tried to paste binary chars into a
+        # regex. Flag it.
+        if "/[" in line and "﻿" in line:
+            issues.append((i, "BOM (U+FEFF) inside a regex literal", line))
+        # Hazard 3: regex literal containing C0 control chars (0x00–0x1F)
+        # in literal form rather than as \xNN escapes.
+        if "/[" in line:
+            for ch in line:
+                if 0x00 <= ord(ch) <= 0x08 or ord(ch) in (0x0B, 0x0C) or 0x0E <= ord(ch) <= 0x1F:
+                    issues.append((i, f"control char U+{ord(ch):04X} in regex literal (use \\xNN)", line))
+                    break
+    return issues
+
+
+def scan_apply_log_for_jsx_errors(log_path):
+    """Scan apply_log.txt for ExtendScript runtime errors that would otherwise
+    be hidden behind try/catch blocks. Returns a list of finding dicts ready
+    to merge into findings.json — empty list if the run was clean.
+
+    Recognized error patterns:
+      • 'SyntaxError' / 'ReferenceError' / 'TypeError' — language-level errors
+      • 'step err:' / 'place err:' — our own JSX log markers for caught errs
+      • 'Error:' — generic InDesign DOM errors
+    """
+    if not Path(log_path).exists():
+        return []
+    text = Path(log_path).read_text(errors="replace")
+    findings = []
+    seen = set()
+    patterns = [
+        (r"\bSyntaxError\b[^\n\r]*", "JSX_SYNTAX_ERROR", "ERROR"),
+        (r"\bReferenceError\b[^\n\r]*", "JSX_REFERENCE_ERROR", "ERROR"),
+        (r"\bTypeError\b[^\n\r]*", "JSX_TYPE_ERROR", "ERROR"),
+        (r"step err:\s*[^\n\r]+", "JSX_STEP_ERROR", "WARNING"),
+        (r"place err:\s*[^\n\r]+", "JSX_PLACE_ERROR", "WARNING"),
+    ]
+    for pat, fid, severity in patterns:
+        for m in re.finditer(pat, text):
+            snippet = m.group(0).strip()
+            key = (fid, snippet[:120])
+            if key in seen: continue
+            seen.add(key)
+            findings.append({
+                "id": fid,
+                "severity": severity,
+                "scope": "doc",
+                "message": f"JSX runtime issue detected in apply_log.txt: {snippet[:200]}",
+                "auto_fixable": False,
+            })
+    return findings
+
+
+def run_indesign_script(jsx_path, timeout=1200, engine=None):
+    """Run a JSX file in the host app. The active engine determines which
+    application AppleScript talks to. Kept the original name so the rest of
+    the code reads naturally — this is a thin shim onto Engine.run_script().
+    """
+    if engine is None:
+        # Backwards compat: assume InDesign if caller didn't supply one.
+        from engines.indesign import InDesignEngine
+        engine = InDesignEngine()
+    return engine.run_script(jsx_path, timeout=timeout)
+
+
+def main():
+    payload = json.loads(sys.argv[1])
+    pdf_path = payload["pdfPath"]
+    indd_path = payload["inddPath"]
+    output_dir = payload["outputDir"]
+    ref_files = payload.get("refFiles", []) or []
+    settings = payload.get("settings") or {}
+
+    # Pick the engine based on the source file extension.
+    engine = get_engine(indd_path)
+
+    log(f"[orchestrate] PDF: {pdf_path}")
+    log(f"[orchestrate] SOURCE ({engine.label}): {indd_path}")
+    log(f"[orchestrate] OUT: {output_dir}")
+    if ref_files:
+        log(f"[orchestrate] REF FILES ({len(ref_files)}):")
+        for rf in ref_files: log(f"[orchestrate]   - {rf}")
+
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Set up a per-run scratch dir for all intermediates. Only the .indd /
+    # .pdf deliverables go into output_dir; everything else (generated JSX,
+    # logs, JSON dumps, findings) lives here so the user's job folder
+    # stays clean. We emit a marker on stdout so the Electron main process
+    # knows where to read findings/result from.
+    work_dir = get_work_dir(output_dir, indd_path, settings.get("cacheRetention", DEFAULT_CACHE_RETENTION))
+    log(f"[orchestrate] WORK: {work_dir}")
+    print(f"[work_dir] {work_dir}", flush=True)  # stdout marker for main.js
+    if settings.get("run508Check"):
+        log("[orchestrate] 508 compliance check: ENABLED")
+
+    # 1. Extract annotations
+    log("[orchestrate] step 1: extracting PDF annotations…")
+    annotations = extract_annotations(pdf_path)
+    log(f"[orchestrate]   found {len(annotations)} annotation(s)")
+    annot_file = work_dir / "annotations.json"
+    annot_file.write_text(json.dumps(annotations, indent=2))
+
+    # 2. Copy .indd to working location with version-bumped filename.
+    # The .indd lives in output_dir (it's a deliverable); InDesign opens
+    # and saves it in place.
+    base = Path(indd_path).stem
+    new_base = bump_version(base)
+    log(f"[orchestrate] output base name: {base} → {new_base}")
+    work_indd = Path(output_dir) / f"{new_base}.indd"   # deliverable
+    out_pdf   = Path(output_dir) / f"{new_base}.pdf"    # deliverable
+    log_path        = work_dir / "apply_log.txt"
+    flags_path      = work_dir / "flags_for_review.txt"
+    findings_path   = work_dir / "findings.json"
+    hyperlinks_path = work_dir / "hyperlinks.json"
+    inspect_out     = work_dir / "doc_inspection.json"
+    edits_path      = work_dir / "edits.json"
+
+    if work_indd.exists():
+        work_indd.unlink()
+    shutil.copy(indd_path, work_indd)
+    log(f"[orchestrate] copied .indd to {work_indd}")
+
+    # 3. Inspect document → JSON
+    log("[orchestrate] step 2: inspecting document structure…")
+    inspect_jsx = work_dir / "inspect_doc.jsx"
+    render_template(engine.inspect_template, {
+        "__INDD_PATH__": str(work_indd),
+        "__INSPECT_OUT_PATH__": str(inspect_out),
+    }, inspect_jsx)
+    proc = run_indesign_script(inspect_jsx, timeout=300, engine=engine)
+    if proc.returncode != 0:
+        log(f"[orchestrate] inspect step failed: {proc.stderr}")
+        sys.exit(1)
+    doc_inspection = {}
+    try:
+        doc_inspection = json.loads(inspect_out.read_text())
+        log(f"[orchestrate]   inspected: {doc_inspection.get('page_count')} page(s), "
+            f"{len(doc_inspection.get('hyperlinks', []))} hyperlink(s)")
+    except Exception as e:
+        log(f"[orchestrate]   inspection JSON parse failed: {e}")
+
+    # 3.5: Auto-discover reference files in the source folder if the annotations
+    # reference a file ID (4-6 digit) that exists locally and the user didn't
+    # already provide it via the UI.
+    auto_discovered = auto_discover_ref_files(annotations, indd_path, ref_files)
+    if auto_discovered:
+        log(f"[orchestrate]   auto-discovered {len(auto_discovered)} ref file(s) in source folder:")
+        for p in auto_discovered: log(f"[orchestrate]     + {Path(p).name}")
+        ref_files = list(ref_files) + auto_discovered
+
+    # 3.6: Inspect each reference file (basic metadata + content preview)
+    log("[orchestrate] step 2.5: inspecting reference files…")
+    ref_inventory = build_ref_inventory(ref_files)
+    log(f"[orchestrate]   inspected {len(ref_inventory)} reference file(s)")
+    if ref_inventory:
+        (work_dir / "reference_inventory.json").write_text(json.dumps(ref_inventory, indent=2))
+
+    # 4. Classify annotations — cascade: rule-based → Ollama → Claude
+    sys.path.insert(0, str(HERE))
+    edits_plan = run_classifier_cascade(annotations, doc_inspection, ref_inventory, log, settings)
+
+    # Write QA config for the JSX to consume
+    qa_config_path = work_dir / "qa_config.json"
+    qa_config_path.write_text(json.dumps({
+        "min_dpi":         settings.get("minDpi", 300),
+        "max_fonts":       settings.get("maxFonts", 4),
+        "body_size_pt":    settings.get("bodySize", 14),
+        "disabled_checks": settings.get("disabledChecks", {}),
+        "confidence":      settings.get("confidence", 0.6),
+        "run_508_check":   bool(settings.get("run508Check", False)),
+    }))
+    edits_path.write_text(json.dumps(edits_plan, indent=2))
+    log(f"[orchestrate]   {len(edits_plan.get('edits', []))} edit op(s), "
+        f"{len(edits_plan.get('human_notes', []))} human note(s)")
+
+    # 5. Generate and run apply_edits_v2.jsx
+    log("[orchestrate] step 4: applying edits + QA scan in InDesign…")
+    apply_jsx = work_dir / "apply_edits_v2.jsx"
+    render_template(engine.apply_template, {
+        "__INDD_PATH__":       str(work_indd),
+        "__PDF_OUT_PATH__":    str(out_pdf),
+        "__LOG_PATH__":        str(log_path),
+        "__FLAGS_PATH__":      str(flags_path),
+        "__FINDINGS_PATH__":   str(findings_path),
+        "__HYPERLINKS_PATH__": str(hyperlinks_path),
+        "__EDITS_PATH__":      str(edits_path),
+        "__QA_CONFIG_PATH__":  str(qa_config_path),
+    }, apply_jsx)
+    proc = run_indesign_script(apply_jsx, engine=engine)
+    if proc.returncode != 0:
+        log(f"[orchestrate] apply step failed: {proc.stderr}")
+        sys.exit(proc.returncode)
+
+    # 5b. Scan apply_log.txt for ExtendScript errors that would otherwise be
+    # silently swallowed by enclosing try/catch blocks (SyntaxError, ReferenceError,
+    # etc.). Surface them as findings so the user — and we — see them.
+    jsx_err_findings = scan_apply_log_for_jsx_errors(log_path)
+    if jsx_err_findings:
+        log(f"[orchestrate] apply_log scan found {len(jsx_err_findings)} JSX runtime issue(s):")
+        for f in jsx_err_findings:
+            log(f"[orchestrate]   [{f['severity']}] {f['id']}: {f['message'][:160]}")
+        merge_findings(findings_path, jsx_err_findings)
+
+    # 6. Python-side QA checks (Box search, hyperlink reachability, spellcheck)
+    log("[orchestrate] step 5: Python-side QA checks…")
+    py_findings = run_python_qa_checks(work_dir, output_dir)
+    if py_findings:
+        merge_findings(findings_path, py_findings)
+
+    # 7. Auto-relink: for each LINK_MISSING with an exact-filename Box match,
+    # apply the relink and re-export. Skipped for engines without a relink
+    # template (currently only InDesign has one).
+    if settings.get("autoRelink", True) and engine.relink_template:
+        relinked = run_auto_relink(work_dir, work_indd, out_pdf, log_path, log, engine)
+        if relinked:
+            log(f"[orchestrate]   auto-relinked {len(relinked)} missing asset(s); PDF re-exported")
+
+    # 8. Auto-activate fonts: for each FONT_UNAVAILABLE finding, try
+    # FontExplorer X Pro activation; for the rest, surface Adobe Fonts URL.
+    if settings.get("autoActivateFonts", True):
+        run_font_activation(work_dir, work_indd, out_pdf, log_path, log, engine)
+
+    # Write result.json into the work_dir (the Electron main process reads
+    # it from there via the [work_dir] stdout marker).
+    (work_dir / "result.json").write_text(json.dumps({
+        "indd_out": str(work_indd),
+        "pdf_out": str(out_pdf),
+        "base_name": new_base,
+        "work_dir": str(work_dir),
+    }))
+
+    log("[orchestrate] done")
+
+
+def run_classifier_cascade(annotations, doc_inspection, ref_inventory, log_fn, settings=None):
+    settings = settings or {}
+    """Cascade: 1) rule-based local (always); 2) for HUMAN_REVIEW results, escalate
+    to Ollama if running; 3) for any still-unresolved, escalate to Claude if API key.
+    Each annotation is classified by the highest-quality classifier that resolved it."""
+    log_fn("[orchestrate] step 3a: rule-based local classifier…")
+    from local_classifier import classify_edits_local
+    plan = classify_edits_local(annotations, doc_inspection, ref_inventory)
+    rule_resolved = sum(1 for e in plan["edits"] if e["op"] != "HUMAN_REVIEW")
+    log_fn(f"[orchestrate]   rule-based resolved {rule_resolved}/{len(plan['edits'])}")
+
+    # Identify annotations eligible for LLM escalation. Skip those the rule-based
+    # classifier explicitly marked _no_escalate (short / non-instructional content
+    # that LLMs tend to hallucinate ops on).
+    unresolved = []
+    for i, edit in enumerate(plan["edits"]):
+        if edit.get("op") != "HUMAN_REVIEW":
+            continue
+        if edit.get("_no_escalate"):
+            continue
+        src = edit.get("source_annotation", "")
+        for ann in annotations:
+            if ann.get("content", "").startswith(src[:50]):
+                unresolved.append((i, ann))
+                break
+    if not unresolved:
+        return plan
+
+    # Try Ollama for unresolved (if enabled in settings)
+    use_ollama = settings.get("useOllama", True)
+    ollama_model = settings.get("ollamaModel") or "llama3.1:8b"
+    if ollama_model:
+        os.environ["OLLAMA_MODEL"] = ollama_model
+    try:
+        from ollama_client import is_running, classify_annotations as ollama_classify
+        if use_ollama and is_running():
+            log_fn(f"[orchestrate]   Ollama model: {ollama_model}")
+            log_fn(f"[orchestrate] step 3b: Ollama escalation for {len(unresolved)} unresolved annotation(s)…")
+            ollama_plan = ollama_classify([a for _, a in unresolved], doc_inspection, ref_inventory)
+            if ollama_plan and ollama_plan.get("edits"):
+                upgraded = 0
+                for j, (orig_idx, _ann) in enumerate(unresolved):
+                    new_op = ollama_plan["edits"][j] if j < len(ollama_plan["edits"]) else None
+                    if new_op and new_op["op"] != "HUMAN_REVIEW":
+                        plan["edits"][orig_idx] = new_op
+                        upgraded += 1
+                log_fn(f"[orchestrate]   Ollama upgraded {upgraded}/{len(unresolved)}")
+                # Re-compute unresolved
+                unresolved = [(i, ann) for i, ann in unresolved if plan["edits"][i]["op"] == "HUMAN_REVIEW"]
+    except Exception as e:
+        log_fn(f"[orchestrate]   Ollama step skipped: {e}")
+
+    return plan
+
+
+def run_auto_relink(work_dir, work_indd, out_pdf, log_path, log_fn, engine=None):
+    """For every LINK_MISSING finding, search Box for an exact filename match.
+    If found, write a relinks.json and run relink.jsx to apply + re-export.
+    Returns list of successfully relinked filenames.
+    """
+    sys.path.insert(0, str(HERE))
+    try:
+        from qa_checks.check_link_recovery import parse_missing_links_from_findings, search_box
+    except Exception as e:
+        log_fn(f"[orchestrate]   auto-relink: import failed: {e}")
+        return []
+
+    findings_path = Path(work_dir) / "findings.json"
+    missing = parse_missing_links_from_findings(findings_path)
+    if not missing:
+        return []
+
+    candidates = []
+    for filename in missing:
+        results = search_box(filename)
+        # Pick the result whose basename exactly matches (case-sensitive)
+        exact = [r for r in results if Path(r).name == filename]
+        if exact:
+            candidates.append({"source_filename": filename, "target_path": exact[0]})
+
+    if not candidates:
+        log_fn("[orchestrate]   auto-relink: no exact Box matches for missing links")
+        return []
+
+    log_fn(f"[orchestrate] step 6: auto-relinking {len(candidates)} missing asset(s)…")
+    relinks_path = Path(work_dir) / "relinks.json"
+    relinks_path.write_text(json.dumps(candidates, indent=2))
+
+    relink_jsx = Path(work_dir) / "relink.jsx"
+    render_template(engine.relink_template, {
+        "__INDD_PATH__":    str(work_indd),
+        "__PDF_OUT_PATH__": str(out_pdf),
+        "__RELINKS_PATH__": str(relinks_path),
+        "__LOG_PATH__":     str(log_path),
+    }, relink_jsx)
+    proc = run_indesign_script(relink_jsx, timeout=600, engine=engine)
+    if proc.returncode != 0:
+        log_fn(f"[orchestrate]   auto-relink failed: {proc.stderr}")
+        return []
+
+    # Update findings.json: append AUTO_RELINKED entries, downgrade or remove
+    # the LINK_MISSING entries that were satisfied
+    try:
+        existing = json.loads(findings_path.read_text())
+    except Exception:
+        existing = {"findings": []}
+
+    relinked_names = {c["source_filename"] for c in candidates}
+    new_findings = []
+    for f in existing.get("findings", []):
+        if f.get("id") == "LINK_MISSING":
+            msg = f.get("message", "")
+            after = msg.split(":", 1)[-1] if ":" in msg else msg
+            still_missing = [n.strip() for n in after.split(",") if n.strip() and n.strip() not in relinked_names]
+            if not still_missing:
+                continue  # all relinked → drop the original error
+            # Re-emit with reduced list
+            new_findings.append({
+                **f,
+                "message": f"{len(still_missing)} missing link(s) (still): " + ", ".join(still_missing),
+            })
+        else:
+            new_findings.append(f)
+    for c in candidates:
+        new_findings.append({
+            "severity": "info",
+            "id": "LINK_AUTO_RELINKED",
+            "category": "links",
+            "location": c["source_filename"],
+            "message": f"Auto-relinked '{c['source_filename']}' → {c['target_path']}",
+            "autoFix": True,
+            "fixAction": "Verify the relinked asset matches the design intent.",
+        })
+    findings_path.write_text(json.dumps({"findings": new_findings}, indent=2))
+
+    return list(relinked_names)
+
+
+def run_font_activation(work_dir, work_indd, out_pdf, log_path, log_fn, engine=None):
+    """Activate any FONT_UNAVAILABLE fonts via FontExplorer X Pro.
+    For ones that can't be activated locally, append a finding with the
+    Adobe Fonts URL. If anything was activated, re-export the PDF.
+    """
+    sys.path.insert(0, str(HERE))
+    try:
+        from font_activator import activate_missing_fonts
+    except Exception as e:
+        log_fn(f"[orchestrate]   font-activator import failed: {e}")
+        return
+
+    findings_path = Path(work_dir) / "findings.json"
+    result = activate_missing_fonts(findings_path)
+    activated = result.get("activated", [])
+    suggested = result.get("suggested", [])
+
+    if not activated and not suggested:
+        return
+
+    log_fn(f"[orchestrate] step 7: font activation — activated {len(activated)}, surfaced {len(suggested)} suggestion(s)")
+
+    # Re-export PDF if any fonts were activated (so they're embedded properly).
+    # Skipped for engines without a re-export template (apply step handles it).
+    if activated and engine and engine.reexport_template:
+        reexport_jsx = Path(work_dir) / "re_export.jsx"
+        render_template(engine.reexport_template, {
+            "__INDD_PATH__":    str(work_indd),
+            "__PDF_OUT_PATH__": str(out_pdf),
+            "__LOG_PATH__":     str(log_path),
+        }, reexport_jsx)
+        # Brief delay to let FontExplorer finish loading fonts
+        import time; time.sleep(2)
+        proc = run_indesign_script(reexport_jsx, timeout=300, engine=engine)
+        if proc.returncode != 0:
+            log_fn(f"[orchestrate]   re-export after font activation failed: {proc.stderr}")
+
+    # Update findings.json
+    try:
+        existing = json.loads(findings_path.read_text())
+    except Exception:
+        existing = {"findings": []}
+
+    activated_set = {a["font"] for a in activated}
+    suggested_set = {s["font"] for s in suggested}
+    new_findings = []
+    for f in existing.get("findings", []):
+        if f.get("id") == "FONT_UNAVAILABLE":
+            msg = f.get("message", "")
+            after = msg.split(":", 1)[-1] if ":" in msg else msg
+            still_missing = [n.strip() for n in after.split(",") if n.strip() and n.strip() in suggested_set]
+            if not still_missing:
+                continue  # all activated → drop the original error
+            new_findings.append({
+                **f,
+                "message": f"{len(still_missing)} font(s) still not activated: " + ", ".join(still_missing),
+            })
+        else:
+            new_findings.append(f)
+    for a in activated:
+        new_findings.append({
+            "severity": "info", "id": "FONT_AUTO_ACTIVATED", "category": "fonts",
+            "location": a["font"],
+            "message": f"Auto-activated '{a['font']}' from {a['source']}; PDF re-exported.",
+            "autoFix": True, "fixAction": "Verify the font matches your design intent.",
+        })
+    for s in suggested:
+        new_findings.append({
+            "severity": "warning", "id": "FONT_ADOBE_FONTS_URL", "category": "fonts",
+            "location": s["font"],
+            "message": f"Font '{s['font']}' not in FontExplorer or Box. Adobe Fonts: {s['adobe_fonts_url']}",
+            "autoFix": False,
+            "fixAction": f"Visit {s['adobe_fonts_url']} and click Activate; then re-run.",
+        })
+    findings_path.write_text(json.dumps({"findings": new_findings}, indent=2))
+
+
+def auto_discover_ref_files(annotations, indd_path, already_provided):
+    """If annotations contain '4-6 digit file ID' references and matching .indd
+    or .pdf files exist in the source folder (NOT already in already_provided),
+    add them to the reference list automatically."""
+    import re as _re
+    already = {Path(p).resolve() for p in (already_provided or [])}
+    src_folder = Path(indd_path).parent
+    if not src_folder.exists():
+        return []
+
+    # Collect IDs mentioned in annotations
+    ids = set()
+    for a in annotations:
+        for m in _re.finditer(r"\b(\d{4,6})\b", a.get("content", "") or ""):
+            ids.add(m.group(1))
+    if not ids:
+        return []
+
+    discovered = []
+    seen = set()
+    for ext in (".indd", ".pdf", ".ai", ".psd", ".jpg", ".jpeg", ".png", ".tif", ".tiff"):
+        for p in src_folder.glob(f"*{ext}"):
+            if p.resolve() in already:
+                continue
+            # Don't pick up the input file itself
+            if p.resolve() == Path(indd_path).resolve():
+                continue
+            for fid in ids:
+                if fid in p.name:
+                    rp = str(p.resolve())
+                    if rp not in seen:
+                        seen.add(rp)
+                        discovered.append(rp)
+                    break
+    return discovered
+
+
+def build_ref_inventory(ref_paths):
+    """For each reference file, capture basic metadata + a content hint so
+    Claude can match annotations to the right file. Multiple files supported.
+    Returns: list of { path, name, ext, type, page_count?, text_preview?, image_dims? }"""
+    inventory = []
+    for path in ref_paths:
+        p = Path(path)
+        if not p.exists():
+            continue
+        ext = p.suffix.lower().lstrip(".")
+        item = {"path": str(p), "name": p.name, "ext": ext, "size_kb": round(p.stat().st_size / 1024)}
+        # Categorize
+        if ext == "indd":
+            item["type"] = "indesign_document"
+            # Can't easily inspect .indd from Python without InDesign; let executor handle on placement
+            item["hint"] = "InDesign document — use APPEND_PAGES_FROM_INDD or PLACE_PAGE_FROM_INDD"
+        elif ext == "pdf":
+            item["type"] = "pdf"
+            try:
+                import fitz
+                d = fitz.open(str(p))
+                item["page_count"] = len(d)
+                if len(d) > 0:
+                    item["text_preview"] = d[0].get_text()[:300].replace("\n", " ").strip()
+            except Exception:
+                pass
+            item["hint"] = "PDF — use PLACE_ASSET_NEW_PAGE or PLACE_ASSET_IN_FRAME"
+        elif ext in ("ai",):
+            item["type"] = "illustrator"
+            item["hint"] = "Illustrator file — use PLACE_ASSET_NEW_PAGE or PLACE_ASSET_IN_FRAME"
+        elif ext == "psd":
+            item["type"] = "photoshop"
+            item["hint"] = "Photoshop file — use PLACE_ASSET_IN_FRAME"
+        elif ext in ("jpg", "jpeg", "png", "tif", "tiff"):
+            item["type"] = "raster_image"
+            try:
+                import fitz
+                pix = fitz.Pixmap(str(p))
+                item["image_dims"] = [pix.width, pix.height]
+            except Exception:
+                pass
+            item["hint"] = "Raster image — use PLACE_ASSET_IN_FRAME"
+        else:
+            item["type"] = "unknown"
+        inventory.append(item)
+    return inventory
+
+
+def run_python_qa_checks(work_dir, deliverables_dir):
+    """Run each Python QA check.
+
+    work_dir          → where intermediates live (hyperlinks.json, findings.json)
+    deliverables_dir  → where .indd/.pdf live (some checks read the PDF)
+
+    Each module's run() takes (work_dir, deliverables_dir). For backwards
+    compatibility we fall back to a single-arg call if a module's signature
+    hasn't been updated yet.
+    """
+    import inspect as _inspect
+    findings = []
+    sys.path.insert(0, str(HERE))
+    for module_name in ["check_hyperlinks_reachability", "check_spelling", "check_link_recovery"]:
+        try:
+            mod = __import__(f"qa_checks.{module_name}", fromlist=["run"])
+            sig = _inspect.signature(mod.run)
+            if len(sig.parameters) >= 2:
+                findings += mod.run(work_dir, deliverables_dir)
+            else:
+                # Legacy single-arg signature — pass work_dir; modules that
+                # need the PDF will fail gracefully.
+                findings += mod.run(work_dir)
+            log(f"[orchestrate]   {module_name}: ok")
+        except Exception as e:
+            log(f"[orchestrate]   {module_name}: failed ({e})")
+    return findings
+
+
+def merge_findings(findings_json_path, additional):
+    try:
+        existing = json.loads(Path(findings_json_path).read_text())
+    except Exception:
+        existing = {"findings": []}
+    existing.setdefault("findings", []).extend(additional)
+    Path(findings_json_path).write_text(json.dumps(existing, indent=2))
+
+
+if __name__ == "__main__":
+    main()
