@@ -74,13 +74,21 @@ function createWindow() {
     x, y, width: w, height: h,
     title: "Production Buddy",
     icon: path.join(__dirname, "assets", "icon.png"),
+    // Hide the window until the renderer has painted, so users don't see
+    // ~5s of blank white before the UI shows. Background matches the
+    // dark theme so even the brief window-creation transition is dark.
+    show: false,
+    backgroundColor: "#0f172a",
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
     },
   });
   mainWindow.loadFile("index.html");
-  mainWindow.focus();
+  mainWindow.once("ready-to-show", () => {
+    mainWindow.show();
+    mainWindow.focus();
+  });
   if (process.argv.includes("--dev")) mainWindow.webContents.openDevTools();
 
   // Kick off the auto-update check shortly after the renderer is ready, so
