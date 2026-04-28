@@ -23,39 +23,60 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1:8b")
 TIMEOUT = 60
 
 
-SYSTEM_PROMPT = """You are an InDesign production assistant. The user gives you a single PDF-annotation sticky-note text plus document context. Decide what edit operation, if any, the annotation requests.
+SYSTEM_PROMPT = """You are an InDesign production assistant. The user gives you ONE annotation from a marked-up PDF — possibly with extra context fields — and you decide what concrete edit it requests. Output JSON only.
+
+INPUT FIELDS YOU MAY RECEIVE
+- annotation: the reviewer's comment text. May be a sticky-note, or an instruction attached to a Highlight/Strikethrough.
+- marked_text: the literal text the reviewer's annotation visually covers (highlight/strike). Empty for sticky notes.
+- line_text: the full visual line containing the annotation. Use this as the find anchor for scoped edits — it's the smallest unit of original text guaranteed to exist in the InDesign doc.
+- annotation_type: "Text" (sticky note), "Highlight", "StrikeOut", "Caret".
+- document: a compact summary of the doc (page count, table column counts, etc.).
 
 DECISION RULE
-A real edit instruction has BOTH (a) a clear imperative ("Replace X with Y", "Delete the X line", "Insert a space before X", "Add a row containing …") AND (b) enough concrete detail to act on. If either is missing, return HUMAN_REVIEW with confidence 1.0.
+A real edit has BOTH (a) a clear imperative AND (b) enough detail to act on without guessing. If either is missing, return HUMAN_REVIEW with confidence 1.0.
 
-Examples that should produce structured ops:
-- "Replace 'Sub-type' with 'Subtype'" → REPLACE_TEXT find='Sub-type' replace_with='Subtype'
-- "Delete the Print Ads line entirely." → HUMAN_REVIEW (target ambiguous — needs human; prefer HUMAN_REVIEW unless you can identify exact line)
-- "Insert a space on both sides of this mathematical symbol." → REPLACE_TEXT find='—' replace_with=' — ' (em dash) IF the document context confirms an em dash usage
-- "Revise to an em dash with spaces." → REPLACE_TEXT (only if the find string is unambiguous; otherwise HUMAN_REVIEW)
-- "Please add: Acme Corp / John Doe / 555-1234 / john@acme.com / NY / ✓" with a 6-column table → ADD_TABLE_ROW values=[…6 values…]
-- "Sort alphabetically by company" → SORT_TABLE column=0
+PREFERRED OUTPUT for text edits: REPLACE_TEXT scoped to line_text.
+  find = the exact line_text (or a substring of it) — must exist verbatim in the doc.
+  replace_with = the line with the requested change applied.
 
-Examples that MUST be HUMAN_REVIEW (never invent ops for these):
-- Bare nouns: "Program", "Subtype", "Fixtures", "Bay Fixtures", "Lumen Ranges"
-- Fragments: "s", "for", "and", "the"
-- Stamps: "Marked set by John"
-- Notes/FYI without explicit instruction
-- Anything where you'd have to guess the find string, file path, target row, or column count
+When the annotation says "throughout", "all", "every", "applies to all of these", you may emit REPLACE_TEXT with params.is_regex=true, where find is a GREP regex (use \\d+, \\w+, etc. — InDesign GREP) and replace_with uses $1, $2 backrefs. Only do this when the user explicitly asked for a global pattern. Otherwise stay scoped to line_text.
 
-Available operations and their REQUIRED fields:
-- ADD_TABLE_ROW       target:{table_id}                params:{values:[...]}  values length MUST equal the table column count
+EXAMPLES (annotation → output)
+- annotation: "Insert a comma between X and Y."  marked: "X Y"  line: "Apple X Y banana"
+  → REPLACE_TEXT find="Apple X Y banana" replace_with="Apple X, Y banana"
+
+- annotation: "Insert a space on both sides of this mathematical symbol. This applies throughout this column."  marked: "x"
+  → REPLACE_TEXT (regex) find="(\\d+)x(\\d+)" replace_with="$1 x $2" is_regex=true
+
+- annotation: "Revise to an em dash with spaces."  marked: "-"  line: "Table 1 - Approved Lamp Measures"
+  → REPLACE_TEXT find="Table 1 - Approved Lamp Measures" replace_with="Table 1 — Approved Lamp Measures"
+
+- annotation: "Lowercase"  marked: "Project"  line: "Non-incentivized Project costs:"
+  → REPLACE_TEXT find="Non-incentivized Project costs:" replace_with="Non-incentivized project costs:"
+
+- annotation: "If it fits"   ← no actionable edit, just guidance
+  → HUMAN_REVIEW
+
+- annotation: "Subtype"  ← bare noun, no imperative
+  → HUMAN_REVIEW
+
+Available operations:
+- REPLACE_TEXT        target:{find}    params:{replace_with, is_regex?}    find must exist verbatim (literal mode) OR be a valid InDesign GREP regex (regex mode).
+- ADD_TABLE_ROW       target:{table_id}                params:{values:[...]}    values length MUST equal the table's column count
 - INSERT_ROW_AT       target:{table_id}                params:{values:[...], index:int}
-- DELETE_ROW          target:{table_id, row_match}     params:{}     row_match must be a real row's leading text
+- DELETE_ROW          target:{table_id, row_match}     params:{}     row_match = exact leading text of a real row
 - SET_CELL_VALUE      target:{table_id, row_match, column}  params:{text}
 - SORT_TABLE          target:{table_id}                params:{column:int}
-- REPLACE_TEXT        target:{find}                    params:{replace_with}     find must be an exact substring (no regex, no placeholders)
 - APPEND_PAGES_FROM_INDD  target:{file_path}           params:{}
 - PLACE_ASSET_NEW_PAGE    target:{file_path}           params:{}
 - PLACE_ASSET_IN_FRAME    target:{file_path, page}     params:{}
-- HUMAN_REVIEW — DEFAULT when in doubt
+- HUMAN_REVIEW — DEFAULT when in doubt.
 
-NEVER use placeholders, regex literals, or null values in target/params. If you can't fill them concretely, return HUMAN_REVIEW.
+HARD RULES
+- NEVER hallucinate. If you can't fill find/replace_with from the input verbatim, return HUMAN_REVIEW.
+- NEVER use placeholders or empty strings.
+- For REPLACE_TEXT in literal mode, find MUST appear character-for-character in line_text or marked_text.
+- For REPLACE_TEXT in regex mode, only use it when the annotation requests a global/throughout-style change.
 
 Output ONLY a JSON object with keys: op, target, params, confidence (0..1), rationale, source_annotation. NO surrounding text."""
 
@@ -135,13 +156,20 @@ def _validate_op(obj, doc_summary):
     return obj
 
 
-def classify_one(annotation_content, doc_summary, reference_files_summary):
-    """Send one annotation to Ollama. Returns dict matching the edit-op shape, or None."""
-    user_msg = json.dumps({
-        "annotation": annotation_content,
-        "document": doc_summary,
-        "reference_files": reference_files_summary,
-    })
+def classify_one(annotation_content, doc_summary, reference_files_summary,
+                 marked_text=None, line_text=None, annotation_type=None):
+    """Send one annotation to Ollama. Returns dict matching the edit-op shape, or None.
+
+    The extra context fields (marked_text, line_text, annotation_type) let
+    Ollama produce a properly-scoped REPLACE_TEXT. Without them it tends to
+    invent find strings that don't exist in the doc.
+    """
+    payload = {"annotation": annotation_content, "document": doc_summary,
+               "reference_files": reference_files_summary}
+    if marked_text:        payload["marked_text"] = marked_text
+    if line_text:          payload["line_text"] = line_text
+    if annotation_type:    payload["annotation_type"] = annotation_type
+    user_msg = json.dumps(payload)
     body = {
         "model": OLLAMA_MODEL,
         "system": SYSTEM_PROMPT,
@@ -208,7 +236,14 @@ def classify_annotations(annotations, doc_inspection, reference_files=None):
     edits = []
     notes = []
     for ann in annotations:
-        op = classify_one(ann.get("content", ""), doc_summary, ref_summary)
+        op = classify_one(
+            ann.get("content", ""),
+            doc_summary,
+            ref_summary,
+            marked_text=ann.get("marked_text"),
+            line_text=ann.get("line_text"),
+            annotation_type=ann.get("type"),
+        )
         if not op:
             edits.append({
                 "op": "HUMAN_REVIEW", "target": {}, "params": {}, "confidence": 1.0,

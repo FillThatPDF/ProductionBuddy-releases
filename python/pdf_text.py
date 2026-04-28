@@ -59,18 +59,33 @@ class PdfTextExtractor:
         return self._plumber
 
     # ---- text extraction (top-left coords) ----
-    def get_words(self, page_idx: int) -> List[dict]:
+    def get_words(self, page_idx: int, split_punctuation: bool = False) -> List[dict]:
         """Return list of word dicts with top-left bboxes:
             {"text": str, "x0": float, "y0": float, "x1": float, "y1": float}
 
-        pdfplumber is the primary engine here because it gives clean per-word
-        bboxes natively — pypdfium2 only exposes per-character rects, which
-        we'd have to group ourselves.
+        Two extraction modes (use both — they answer different questions):
+
+        - split_punctuation=False (default): "High-bay" stays one token,
+          "program." stays one token, "demand,or,>40,000" stays one token.
+          Use this for `line_text` reconstruction so find strings match
+          InDesign's character sequence exactly.
+
+        - split_punctuation=True: ONLY hyphens are treated as word
+          delimiters. "High-bay" → ["High", "-", "bay"], but "program.",
+          "demand, or, >40,000" stay as cohesive tokens. Use this for
+          `marked_text` extraction so a strike on "-bay fixtures" captures
+          only those tokens and not the surrounding hyphenated word —
+          without breaking captures that include commas, periods, parens,
+          dollar signs, etc.
         """
         try:
             page = self._plumber_doc().pages[page_idx]
-            words = page.extract_words(use_text_flow=True)
-            # pdfplumber already returns top-left coords with x0/x1, top/bottom
+            # pdfplumber takes a string of delimiter chars when not bool.
+            split_arg = "-" if split_punctuation else False
+            words = page.extract_words(
+                use_text_flow=True,
+                split_at_punctuation=split_arg,
+            )
             return [{
                 "text": w.get("text", ""),
                 "x0": float(w["x0"]),

@@ -21,13 +21,19 @@ function getOrchestratorSpawn(payloadJSON) {
     const bundled = path.join(process.resourcesPath, "python-engine", "orchestrate");
     return { command: bundled, args: [payloadJSON] };
   }
-  // Dev mode — try the bundled binary first if it's been built locally,
-  // otherwise spawn python3 directly.
-  const localBundle = path.join(__dirname, "python", "dist", "orchestrate", "orchestrate");
-  if (fs.existsSync(localBundle)) {
-    return { command: localBundle, args: [payloadJSON] };
+  // Dev mode — always run the source code via the venv's python3 so code
+  // changes are picked up immediately. The local PyInstaller bundle is for
+  // testing the packaged build path; force it via env var only.
+  if (process.env.PB_USE_LOCAL_BUNDLE) {
+    const localBundle = path.join(__dirname, "python", "dist", "orchestrate", "orchestrate");
+    if (fs.existsSync(localBundle)) {
+      return { command: localBundle, args: [payloadJSON] };
+    }
   }
-  const py = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
+  // Prefer the project venv (has pikepdf/pypdfium2/pdfplumber installed),
+  // then fall back to system python3.
+  const venvPy = path.join(__dirname, "pyenv", "bin", "python3");
+  const py = [venvPy, "/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
     .find((p) => { try { return fs.existsSync(p); } catch { return false; } }) || "python3";
   return {
     command: py,

@@ -732,15 +732,33 @@
         if (op === "REPLACE_TEXT") {
             var find = edit.target && edit.target.find;
             var replace = edit.params && edit.params.replace_with;
+            var isRegex = !!(edit.params && edit.params.is_regex);
             if (!find) { FLAG("REPLACE_TEXT: no find string"); return; }
-            app.findGrepPreferences = NothingEnum.NOTHING;
-            app.changeGrepPreferences = NothingEnum.NOTHING;
-            app.findGrepPreferences.findWhat = find;
-            app.changeGrepPreferences.changeTo = String(replace || "");
-            var hits = doc.changeGrep().length;
-            L("  replaced " + hits + " occurrence(s) of \"" + find + "\"");
-            app.findGrepPreferences = NothingEnum.NOTHING;
-            app.changeGrepPreferences = NothingEnum.NOTHING;
+            // Two modes:
+            //   - Literal (default): findText/changeText — find string is taken
+            //     as literal characters. $, (, ), . are NOT regex metachars.
+            //   - Regex (is_regex=true): findGrep/changeGrep — for cases
+            //     where the classifier needs to match a pattern globally
+            //     (e.g. "(\\d+)x(\\d+)" → "$1 x $2" applied throughout a doc).
+            if (isRegex) {
+                app.findGrepPreferences = NothingEnum.NOTHING;
+                app.changeGrepPreferences = NothingEnum.NOTHING;
+                app.findGrepPreferences.findWhat = find;
+                app.changeGrepPreferences.changeTo = String(replace || "");
+                var hitsR = doc.changeGrep().length;
+                L("  replaced " + hitsR + " occurrence(s) [regex] of \"" + find + "\"");
+                app.findGrepPreferences = NothingEnum.NOTHING;
+                app.changeGrepPreferences = NothingEnum.NOTHING;
+            } else {
+                app.findTextPreferences = NothingEnum.NOTHING;
+                app.changeTextPreferences = NothingEnum.NOTHING;
+                app.findTextPreferences.findWhat = find;
+                app.changeTextPreferences.changeTo = String(replace || "");
+                var hits = doc.changeText().length;
+                L("  replaced " + hits + " occurrence(s) of \"" + find + "\"");
+                app.findTextPreferences = NothingEnum.NOTHING;
+                app.changeTextPreferences = NothingEnum.NOTHING;
+            }
             return;
         }
 
@@ -1245,6 +1263,71 @@
         var maxFontsThreshold = qaConfig.max_fonts || 4;
         if (doc.fonts.length > maxFontsThreshold && checkEnabled("FONT_TOO_MANY")) FINDING("warning", "FONT_TOO_MANY", "fonts", "doc", doc.fonts.length + " distinct fonts (consider consolidating to ≤" + maxFontsThreshold + ")");
     }, "fonts");
+
+    // Character styles with no Font Family set inherit at runtime, but the
+    // result is unreliable — bullets can render in a fallback font instead
+    // of the doc's actual body font. Auto-fix: detect character styles with
+    // empty appliedFont and assign them the dominant body font.
+    safe(function () {
+        if (!checkEnabled("STYLE_FONTLESS_CHAR_STYLE")) return;
+
+        // Pick the dominant body font: count font usage across body-ish
+        // paragraph styles (body/bullet/table/callout/section/copy in name).
+        var counts = {};
+        var samples = {};
+        try {
+            for (var i = 0; i < doc.paragraphStyles.length; i++) {
+                var ps = doc.paragraphStyles[i];
+                var psName = String(ps.name || "").toLowerCase();
+                if (psName.indexOf("[") === 0) continue;
+                if (!/body|bullet|table|callout|section|copy/.test(psName)) continue;
+                var fName = "", fStyle = "Regular";
+                try {
+                    var ap = ps.appliedFont;
+                    if (ap) fName = ap.fullName ? String(ap.fullName).split("\t")[0] : String(ap);
+                } catch (e) {}
+                try { fStyle = String(ps.fontStyle || "Regular"); } catch (e) {}
+                if (fName) {
+                    var key = fName + "\t" + fStyle;
+                    counts[key] = (counts[key] || 0) + 1;
+                    samples[key] = { font: fName, style: fStyle };
+                }
+            }
+        } catch (e) {}
+        var bestKey = null, bestCount = 0;
+        for (var k in counts) if (counts[k] > bestCount) { bestCount = counts[k]; bestKey = k; }
+        if (!bestKey) return;
+        var dominant = samples[bestKey];
+
+        var fixed = 0, fixedNames = [];
+        for (var ci = 0; ci < doc.characterStyles.length; ci++) {
+            var cs = doc.characterStyles[ci];
+            var csName = String(cs.name || "");
+            if (csName === "[None]") continue;
+            var apFont = null;
+            try { apFont = cs.appliedFont; } catch (e) {}
+            var apFontName = "";
+            try {
+                if (apFont) apFontName = apFont.fullName ? String(apFont.fullName) : String(apFont);
+            } catch (e) {}
+            apFontName = (apFontName || "").replace(/\s+/g, "");
+            if (apFontName && apFontName.toLowerCase() !== "undefined") continue;
+            try {
+                cs.appliedFont = dominant.font;
+                cs.fontStyle  = dominant.style;
+                fixed++;
+                fixedNames.push(csName);
+            } catch (e) {
+                L("  STYLE_FONTLESS_CHAR_STYLE err for '" + csName + "': " + e);
+            }
+        }
+        if (fixed > 0) {
+            FINDING("info", "STYLE_FONTLESS_CHAR_STYLE", "fonts", "doc",
+                "Auto-fixed " + fixed + " character style(s) with empty Font Family → " +
+                dominant.font + " " + dominant.style + ": " + fixedNames.slice(0, 8).join(", "),
+                true);
+        }
+    }, "fontless character styles");
 
     safe(function () {
         if (!checkEnabled("IMG_LOW_RES") && !checkEnabled("IMG_COUNT")) return;

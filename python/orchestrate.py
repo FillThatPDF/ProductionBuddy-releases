@@ -145,6 +145,69 @@ def _quad_rects_from_quadpoints(qp, page_h):
     return rects
 
 
+def _strip_leading_bullet(text):
+    """Strip a leading bullet glyph + spacing from a reconstructed line.
+    InDesign typically renders bullets via paragraph style (not as inline
+    glyphs in the text run), so a `find` string that starts with "• " will
+    fail to match the actual run. We strip a few common bullet/dash chars.
+    """
+    if not text:
+        return text
+    # Common bullets / decorations PDF readers emit at the start of list items
+    return re.sub(r"^\s*[•‣◦⁃∙·●–—\-\*]+\s*", "", text).strip()
+
+
+def _line_text_around(words, cx, cy, line_height_band=14, baseline_tol=2,
+                      cell_x_gap=40):
+    """Reconstruct the visual line of text containing the point (cx, cy).
+    Used by markup annotations (StrikeOut/Highlight/etc.) so the classifier
+    has surrounding context for scoped replacements — without this, a
+    strikethrough on "3" or "Up" would trigger a global delete across the
+    whole doc.
+
+    Two-pass selection mirrors the sticky-note logic: loose y-band first to
+    pick up nearby words, then a tight baseline filter to avoid bleeding
+    into the next/previous visual line.
+
+    Cross-cell guard: after reconstructing the candidate line, split on any
+    horizontal x-gap larger than `cell_x_gap` between adjacent words. PDF
+    table cells usually sit ≥ 40pt apart, so a big gap means we crossed a
+    column boundary. We then keep only the chunk that contains the point
+    (cx, cy).
+    """
+    if not words:
+        return None
+    # Loose first pass — words within line_height_band of the y center
+    candidates = []
+    for w in words:
+        wcy = (w["y0"] + w["y1"]) / 2
+        if abs(wcy - cy) <= line_height_band:
+            candidates.append(w)
+    if not candidates:
+        return None
+    # Pick the closest word to (cx, cy) as the seed
+    candidates.sort(key=lambda w: (w["y0"] - cy) ** 2 + ((w["x0"] + w["x1"]) / 2 - cx) ** 2)
+    seed = candidates[0]
+    seed_y0 = seed["y0"]
+    # Tight second pass — only words on the same baseline as the seed
+    line_words = [w for w in candidates if abs(w["y0"] - seed_y0) <= baseline_tol]
+    line_words.sort(key=lambda w: w["x0"])
+    # Split on big horizontal gaps (= column boundaries in tables) and keep
+    # only the chunk that contains the seed point.
+    chunks = [[]]
+    for w in line_words:
+        if chunks[-1] and (w["x0"] - chunks[-1][-1]["x1"]) > cell_x_gap:
+            chunks.append([])
+        chunks[-1].append(w)
+    seed_chunk = chunks[0]
+    for chunk in chunks:
+        if any(w is seed for w in chunk):
+            seed_chunk = chunk
+            break
+    line_text = " ".join(w["text"] for w in seed_chunk).strip()
+    return _strip_leading_bullet(line_text)
+
+
 def extract_annotations(pdf_path):
     """Extract sticky-note annotations from the marked-up PDF and, for each,
     capture what text is *near* the annotation's icon so we can detect the
@@ -186,8 +249,15 @@ def extract_annotations(pdf_path):
             except Exception:
                 page_h = text.page_height(page_idx)
 
-            # Pre-fetch all words on the page once (top-left coords)
+            # Pre-fetch all words on the page in two modes:
+            #   - words: hyphenated tokens stay merged ("High-bay") — used
+            #     for line_text reconstruction so the find string matches
+            #     the original InDesign character sequence.
+            #   - words_split: punctuation/hyphen-split tokens — used for
+            #     marked_text extraction so a strike on "-bay fixtures"
+            #     captures only that, not the whole "High-bay" token.
             words = text.get_words(page_idx)
+            words_split = text.get_words(page_idx, split_punctuation=True)
 
             annots = page.get("/Annots", [])
             for a in annots:
@@ -220,7 +290,55 @@ def extract_annotations(pdf_path):
                 if atype in MARKUP_TYPES:
                     marked_text = ""
                     sub_rects = _quad_rects_from_quadpoints(a.get("/QuadPoints", None), page_h)
+                    # Prefer word-level extraction with a 50% bbox-overlap
+                    # rule. Two failure modes to balance:
+                    #   - Center-inside-quad is too strict: a strike that
+                    #     visually covers "bay fixtures" can leave "bay" out
+                    #     if its center is barely past the quad's left edge.
+                    #   - pypdfium2's get_text_bounded is too leaky: a strike
+                    #     on "upfront" returns "y upfront" because the rect
+                    #     clips a tail glyph from an adjacent word.
+                    # Requiring ≥ 50% of the word's area to overlap the quad
+                    # catches words with a small overshoot and rejects words
+                    # only partially clipped at the edge.
                     if sub_rects:
+                        bits = []
+                        for sr in sub_rects:
+                            sx0, sy0, sx1, sy1 = sr
+                            in_rect = []
+                            # Use the split-punctuation word set so a strike
+                            # on "-bay fixtures" captures only those tokens,
+                            # not the whole "High-bay" hyphenated word.
+                            for w in words_split:
+                                ww = w["x1"] - w["x0"]
+                                wh = w["y1"] - w["y0"]
+                                if ww <= 0 or wh <= 0:
+                                    continue
+                                ox = max(0.0, min(w["x1"], sx1) - max(w["x0"], sx0))
+                                oy = max(0.0, min(w["y1"], sy1) - max(w["y0"], sy0))
+                                if (ox * oy) / (ww * wh) >= 0.5:
+                                    in_rect.append(w)
+                            if in_rect:
+                                in_rect.sort(key=lambda w: (round(w["y0"]), w["x0"]))
+                                # Re-join WITHOUT spaces around hyphens that
+                                # bind to adjacent letters (so "-" + "bay"
+                                # → "-bay"); regular spaces between alpha
+                                # tokens stay.
+                                pieces = []
+                                for w in in_rect:
+                                    t = w["text"]
+                                    if t == "-" and pieces and not pieces[-1].endswith(" "):
+                                        pieces[-1] = pieces[-1] + "-"
+                                    elif pieces and pieces[-1].endswith("-"):
+                                        pieces[-1] = pieces[-1] + t
+                                    else:
+                                        pieces.append(t)
+                                bits.append(" ".join(pieces))
+                        marked_text = " ".join(bits).strip()
+                    # Fall back to pypdfium2's bounded text if no words landed
+                    # inside the quads (rare — happens with very narrow strike
+                    # marks on punctuation).
+                    if not marked_text and sub_rects:
                         bits = []
                         for sr in sub_rects:
                             t = text.get_text_in_rect(page_idx, sr).strip()
@@ -228,7 +346,7 @@ def extract_annotations(pdf_path):
                                 bits.append(t)
                         marked_text = " ".join(bits).strip()
                     if not marked_text:
-                        # Fallback: words intersecting the annotation rect
+                        # Final fallback: words intersecting the annotation rect
                         bits = []
                         for w in words:
                             if (w["x0"] >= rx0 - 1 and w["x1"] <= rx1 + 1 and
@@ -238,16 +356,27 @@ def extract_annotations(pdf_path):
                     # Strip control chars + collapse whitespace
                     marked_text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]+", "", marked_text)
                     marked_text = re.sub(r"\s+", " ", marked_text).strip()
+
+                    # Also reconstruct surrounding line_text — gives the
+                    # classifier context for scoped replacement when the
+                    # marked text is too short to safely match globally
+                    # (e.g. a strikethrough on "3" or "Up").
+                    sl_line_text = _line_text_around(words, (rx0 + rx1) / 2, (ry0 + ry1) / 2)
+
                     if marked_text:
                         annotations.append({
                             "page": page_idx + 1,
                             "rect": [round(x, 2) for x in r],
                             "type": atype,
-                            "content": "",
+                            # Highlights/Underlines often carry an instruction
+                            # in /Contents (e.g. "Lowercase", "Use a curly
+                            # apostrophe...") — capture it so the classifier
+                            # can act on or surface it.
+                            "content": content,
                             "marked_text": marked_text,
                             "nearby_text": None,
                             "nearby_rect": None,
-                            "line_text": None,
+                            "line_text": sl_line_text,
                         })
                     continue
 
@@ -259,6 +388,16 @@ def extract_annotations(pdf_path):
                 # Find nearest word(s). Bias: same horizontal line as icon,
                 # prefer words to the LEFT (reviewers typically place sticky-
                 # note icons after the word being commented on).
+                #
+                # Two-pass:
+                #   1. Loose y-band (14pt) to find candidate words near the icon
+                #      — sticky icons are ~24pt tall and rarely centered exactly
+                #      on a baseline, so we need a forgiving first pass.
+                #   2. After picking the closest word, re-filter to ONLY the
+                #      words on the picked word's actual baseline (y0 within
+                #      ~2pt). This keeps adjacent visual lines from leaking into
+                #      `line_text`. PyMuPDF gave us block/line numbers for free;
+                #      pdfplumber doesn't, so we use top-edge proximity instead.
                 line_height_band = 14
                 same_line = []
                 for w in words:
@@ -281,9 +420,30 @@ def extract_annotations(pdf_path):
                     pick = left_of[0] if left_of else same_line[0]
                     nearby_text = pick["text"]
                     nearby_rect = pick["rect"]
-                    # Approximate the full line as all same-line words sorted left→right
-                    line_words = sorted(same_line, key=lambda w: w["rect"][0])
-                    line_text = " ".join(w["text"] for w in line_words).strip()
+                    # Tight pass: same baseline as the picked word (tolerate
+                    # ~2pt for ascender/descender drift).
+                    pick_y0 = pick["rect"][1]
+                    line_words = [w for w in same_line if abs(w["rect"][1] - pick_y0) <= 2]
+                    line_words.sort(key=lambda w: w["rect"][0])
+                    # Cross-cell guard: split on x-gap > 40pt (likely a
+                    # column boundary) and keep only the chunk containing
+                    # the picked word. Otherwise table-row line_text would
+                    # merge "Incentive" (label column) with "Up to $X" body.
+                    chunks = [[]]
+                    cell_x_gap = 40
+                    for lw in line_words:
+                        if chunks[-1] and (lw["rect"][0] - chunks[-1][-1]["rect"][2]) > cell_x_gap:
+                            chunks.append([])
+                        chunks[-1].append(lw)
+                    pick_chunk = chunks[0]
+                    for chunk in chunks:
+                        if any(w is pick for w in chunk):
+                            pick_chunk = chunk; break
+                    line_text = " ".join(w["text"] for w in pick_chunk).strip()
+                    # Strip leading bullets — InDesign bullets are rendered
+                    # by paragraph style, not as inline glyphs, so they
+                    # won't appear in the runs we find/replace against.
+                    line_text = _strip_leading_bullet(line_text)
 
                 annotations.append({
                     "page": page_idx + 1,
