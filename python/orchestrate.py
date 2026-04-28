@@ -98,6 +98,53 @@ def bump_version(base_name):
     return base_name[:m.start()] + sep + v + new_num_str
 
 
+def _normalize_pdf_rect(rect, page_h):
+    """Convert a pikepdf /Rect = [x0_bl, y0_bl, x1_bl, y1_bl] (PDF-native,
+    bottom-left origin) into PyMuPDF-style top-left coords (x0, y0_top, x1,
+    y1_bot) with y0_top < y1_bot. Also normalizes corner ordering — some
+    writers emit /Rect with x0 > x1 etc.
+    """
+    if rect is None or len(rect) < 4:
+        return None
+    try:
+        # pikepdf.Array doesn't support int slicing — iterate to get vals.
+        vals = [float(v) for v in rect]
+        x0, y0_bl, x1, y1_bl = vals[0], vals[1], vals[2], vals[3]
+    except Exception:
+        return None
+    lx, rx = min(x0, x1), max(x0, x1)
+    ly, ry = min(y0_bl, y1_bl), max(y0_bl, y1_bl)
+    # Flip y for top-left origin
+    return (lx, page_h - ry, rx, page_h - ly)
+
+
+def _quad_rects_from_quadpoints(qp, page_h):
+    """Convert pikepdf /QuadPoints (8 floats per quad, PDF coords) into a
+    list of bounding rects in top-left origin.
+
+    The quad-point order varies by writer (Acrobat vs ISO 32000), so we
+    just take min/max over all four points per quad — the bounding box is
+    correct regardless of corner order.
+    """
+    rects = []
+    if qp is None:
+        return rects
+    try:
+        vals = [float(v) for v in qp]
+    except Exception:
+        return rects
+    if len(vals) % 8 != 0:
+        return rects
+    for i in range(0, len(vals), 8):
+        pts = vals[i:i + 8]
+        xs = pts[0::2]
+        ys = pts[1::2]
+        lx, rx = min(xs), max(xs)
+        ly_bl, ry_bl = min(ys), max(ys)
+        rects.append((lx, page_h - ry_bl, rx, page_h - ly_bl))
+    return rects
+
+
 def extract_annotations(pdf_path):
     """Extract sticky-note annotations from the marked-up PDF and, for each,
     capture what text is *near* the annotation's icon so we can detect the
@@ -110,107 +157,147 @@ def extract_annotations(pdf_path):
       nearby_text_rect  — bbox of that text in the PDF
       line_text         — full line containing the nearby text
     """
-    import fitz
-    doc = fitz.open(pdf_path)
+    import pikepdf
+    from pdf_text import PdfTextExtractor
+
     annotations = []
-    for page_idx, page in enumerate(doc):
-        # Pre-fetch all words on the page once, with positions
-        words = page.get_text("words")  # (x0, y0, x1, y1, "word", block_no, line_no, word_no)
-        for a in page.annots() or []:
-            atype = a.type[1] if a.type else ""
-            content = (a.info.get("content") or "").strip()
-            r = a.rect
 
-            # ---- Strikethrough / underline / highlight: extract underlying text ----
-            # These annotations carry quad points (vertices) describing the
-            # exact regions of text the marker covers — multiple per annotation
-            # if the markup spans multiple lines. We extract text from each quad
-            # and concatenate; gives us the actual marked text, not the whole
-            # paragraph rect.
-            if atype in ("StrikeOut", "Underline", "Squiggly", "Highlight"):
-                marked_text = ""
+    # PDF Subtype names → simplified type labels (matches the strings the
+    # rule-based classifier expects).
+    _SUBTYPE_MAP = {
+        "/Text":      "Text",
+        "/StrikeOut": "StrikeOut",
+        "/Underline": "Underline",
+        "/Squiggly":  "Squiggly",
+        "/Highlight": "Highlight",
+        "/FreeText":  "FreeText",
+        "/Caret":     "Caret",
+    }
+    MARKUP_TYPES = ("StrikeOut", "Underline", "Squiggly", "Highlight")
+
+    pdf = pikepdf.open(pdf_path)
+    text = PdfTextExtractor(pdf_path)
+    try:
+        for page_idx, page in enumerate(pdf.pages):
+            # PDF page MediaBox height (for y-axis flipping into top-left coords)
+            try:
+                mbox = page.MediaBox
+                page_h = float(mbox[3]) - float(mbox[1])
+            except Exception:
+                page_h = text.page_height(page_idx)
+
+            # Pre-fetch all words on the page once (top-left coords)
+            words = text.get_words(page_idx)
+
+            annots = page.get("/Annots", [])
+            for a in annots:
+                # pikepdf auto-resolves indirect refs on attribute access
                 try:
-                    quads = a.vertices  # list of (x, y) tuples — 4 per quad
-                    if quads and len(quads) % 4 == 0:
-                        bits = []
-                        import fitz as _fitz
-                        for q in range(0, len(quads), 4):
-                            pts = quads[q:q+4]
-                            xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
-                            sub_rect = _fitz.Rect(min(xs), min(ys), max(xs), max(ys))
-                            t = page.get_textbox(sub_rect).strip()
-                            if t: bits.append(t)
-                        marked_text = " ".join(bits).strip()
+                    subtype = str(a.get("/Subtype", ""))
                 except Exception:
-                    pass
-                if not marked_text:
-                    # Fallback: use words intersecting the rect
-                    bits = []
-                    for w in words:
-                        if w[0] >= r.x0 - 1 and w[2] <= r.x1 + 1 and w[1] >= r.y0 - 2 and w[3] <= r.y1 + 2:
-                            bits.append(w[4])
-                    marked_text = " ".join(bits).strip()
-                # Clean up control characters PyMuPDF sometimes inserts (BEL etc.)
-                marked_text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]+", "", marked_text)
-                # Collapse multiple whitespace
-                marked_text = re.sub(r"\s+", " ", marked_text).strip()
-                if marked_text:
-                    annotations.append({
-                        "page": page_idx + 1,
-                        "rect": [round(x, 2) for x in r],
-                        "type": atype,
-                        "content": "",  # no comment text
-                        "marked_text": marked_text,
-                        "nearby_text": None,
-                        "nearby_rect": None,
-                        "line_text": None,
-                    })
-                continue
-
-            if not content:
-                continue
-            cx = (r.x0 + r.x1) / 2
-            cy = (r.y0 + r.y1) / 2
-
-            # Find nearest word(s). Bias: same horizontal line as icon, prefer words to the LEFT
-            # (reviewers typically place sticky-note icons after the word being commented on).
-            line_height_band = 14  # pt
-            same_line = []
-            for w in words:
-                x0, y0, x1, y1, t = w[0], w[1], w[2], w[3], w[4]
-                if not t.strip():
                     continue
-                wcy = (y0 + y1) / 2
-                if abs(wcy - cy) > line_height_band:
+                atype = _SUBTYPE_MAP.get(subtype, subtype.lstrip("/"))
+                # Contents (for sticky notes / FreeText). pikepdf returns
+                # pikepdf.String — coerce to str.
+                content = ""
+                try:
+                    raw = a.get("/Contents", "")
+                    content = str(raw).strip() if raw is not None else ""
+                except Exception:
+                    content = ""
+
+                # Annotation rect (top-left origin)
+                r = _normalize_pdf_rect(a.get("/Rect", None), page_h)
+                if r is None:
                     continue
-                # Distance from word's right edge to icon (negative if word is to the right of icon)
-                gap = cx - x1
-                same_line.append({"text": t, "rect": [x0, y0, x1, y1], "gap": gap, "block": w[5], "line": w[6]})
+                rx0, ry0, rx1, ry1 = r
 
-            nearby_text = None
-            nearby_rect = None
-            line_text = None
-            if same_line:
-                # Words on this line that come BEFORE the icon (preferred)
-                left_of = [w for w in same_line if w["gap"] >= -5]
-                left_of.sort(key=lambda w: w["gap"])  # smallest positive gap first (closest to icon)
-                pick = left_of[0] if left_of else same_line[0]
-                nearby_text = pick["text"]
-                nearby_rect = pick["rect"]
-                # Reconstruct the full line
-                line_words = [w for w in same_line if w["block"] == pick["block"] and w["line"] == pick["line"]]
-                line_words.sort(key=lambda w: w["rect"][0])
-                line_text = " ".join(w["text"] for w in line_words).strip()
+                # ---- Strikethrough / underline / highlight: extract underlying text ----
+                # These annotations carry /QuadPoints describing the exact regions
+                # of text the marker covers — multiple per annotation if the
+                # markup spans multiple lines. We extract text from each quad and
+                # concatenate; gives us the actual marked text, not the whole rect.
+                if atype in MARKUP_TYPES:
+                    marked_text = ""
+                    sub_rects = _quad_rects_from_quadpoints(a.get("/QuadPoints", None), page_h)
+                    if sub_rects:
+                        bits = []
+                        for sr in sub_rects:
+                            t = text.get_text_in_rect(page_idx, sr).strip()
+                            if t:
+                                bits.append(t)
+                        marked_text = " ".join(bits).strip()
+                    if not marked_text:
+                        # Fallback: words intersecting the annotation rect
+                        bits = []
+                        for w in words:
+                            if (w["x0"] >= rx0 - 1 and w["x1"] <= rx1 + 1 and
+                                    w["y0"] >= ry0 - 2 and w["y1"] <= ry1 + 2):
+                                bits.append(w["text"])
+                        marked_text = " ".join(bits).strip()
+                    # Strip control chars + collapse whitespace
+                    marked_text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]+", "", marked_text)
+                    marked_text = re.sub(r"\s+", " ", marked_text).strip()
+                    if marked_text:
+                        annotations.append({
+                            "page": page_idx + 1,
+                            "rect": [round(x, 2) for x in r],
+                            "type": atype,
+                            "content": "",
+                            "marked_text": marked_text,
+                            "nearby_text": None,
+                            "nearby_rect": None,
+                            "line_text": None,
+                        })
+                    continue
 
-            annotations.append({
-                "page": page_idx + 1,
-                "rect": [round(x, 2) for x in r],
-                "type": a.type[1],
-                "content": content,
-                "nearby_text": nearby_text,
-                "nearby_rect": nearby_rect,
-                "line_text": line_text,
-            })
+                if not content:
+                    continue
+                cx = (rx0 + rx1) / 2
+                cy = (ry0 + ry1) / 2
+
+                # Find nearest word(s). Bias: same horizontal line as icon,
+                # prefer words to the LEFT (reviewers typically place sticky-
+                # note icons after the word being commented on).
+                line_height_band = 14
+                same_line = []
+                for w in words:
+                    x0, y0, x1, y1 = w["x0"], w["y0"], w["x1"], w["y1"]
+                    t = w["text"]
+                    if not t.strip():
+                        continue
+                    wcy = (y0 + y1) / 2
+                    if abs(wcy - cy) > line_height_band:
+                        continue
+                    gap = cx - x1  # negative if word is to the right of icon
+                    same_line.append({"text": t, "rect": [x0, y0, x1, y1], "gap": gap})
+
+                nearby_text = None
+                nearby_rect = None
+                line_text = None
+                if same_line:
+                    left_of = [w for w in same_line if w["gap"] >= -5]
+                    left_of.sort(key=lambda w: w["gap"])
+                    pick = left_of[0] if left_of else same_line[0]
+                    nearby_text = pick["text"]
+                    nearby_rect = pick["rect"]
+                    # Approximate the full line as all same-line words sorted left→right
+                    line_words = sorted(same_line, key=lambda w: w["rect"][0])
+                    line_text = " ".join(w["text"] for w in line_words).strip()
+
+                annotations.append({
+                    "page": page_idx + 1,
+                    "rect": [round(x, 2) for x in r],
+                    "type": atype,
+                    "content": content,
+                    "nearby_text": nearby_text,
+                    "nearby_rect": nearby_rect,
+                    "line_text": line_text,
+                })
+    finally:
+        text.close()
+        pdf.close()
+
     return annotations
 
 
@@ -768,11 +855,12 @@ def build_ref_inventory(ref_paths):
         elif ext == "pdf":
             item["type"] = "pdf"
             try:
-                import fitz
-                d = fitz.open(str(p))
-                item["page_count"] = len(d)
-                if len(d) > 0:
-                    item["text_preview"] = d[0].get_text()[:300].replace("\n", " ").strip()
+                from pdf_text import quick_pdf_info
+                info = quick_pdf_info(str(p))
+                if "page_count" in info:
+                    item["page_count"] = info["page_count"]
+                if "first_page_preview" in info and info["first_page_preview"]:
+                    item["text_preview"] = info["first_page_preview"]
             except Exception:
                 pass
             item["hint"] = "PDF — use PLACE_ASSET_NEW_PAGE or PLACE_ASSET_IN_FRAME"
@@ -785,9 +873,10 @@ def build_ref_inventory(ref_paths):
         elif ext in ("jpg", "jpeg", "png", "tif", "tiff"):
             item["type"] = "raster_image"
             try:
-                import fitz
-                pix = fitz.Pixmap(str(p))
-                item["image_dims"] = [pix.width, pix.height]
+                from pdf_text import quick_image_dims
+                dims = quick_image_dims(str(p))
+                if dims:
+                    item["image_dims"] = list(dims)
             except Exception:
                 pass
             item["hint"] = "Raster image — use PLACE_ASSET_IN_FRAME"

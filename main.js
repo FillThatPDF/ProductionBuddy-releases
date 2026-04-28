@@ -9,30 +9,30 @@ const fs = require("fs");
 
 let mainWindow;
 
-// In a packaged app, Python source ships under process.resourcesPath/python/.
-// In dev (npm start), it's at ./python relative to this file. The orchestrator
-// imports siblings from the same directory, so we always pass an absolute path.
-function getOrchestratorPath() {
+// Resolve how to invoke the orchestrator:
+//   - Packaged: a self-contained PyInstaller bundle ships at
+//     Contents/Resources/python-engine/orchestrate. No system Python needed.
+//   - Dev (npm start): fall back to running orchestrate.py with the host
+//     python3 (faster iteration than rebuilding the bundle every change).
+//
+// Returns { command, args } that can be passed straight to spawn().
+function getOrchestratorSpawn(payloadJSON) {
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, "python", "orchestrate.py");
+    const bundled = path.join(process.resourcesPath, "python-engine", "orchestrate");
+    return { command: bundled, args: [payloadJSON] };
   }
-  return path.join(__dirname, "python", "orchestrate.py");
-}
-
-// Hardened Python resolver: explicit, deterministic, falls back through
-// common system locations. We don't ship Python — the user needs python3
-// installed (Homebrew, system, or pyenv all work). This is logged on
-// startup so a missing-deps run doesn't fail mysteriously.
-function getPythonPath() {
-  const candidates = [
-    "/opt/homebrew/bin/python3",   // Apple Silicon Homebrew
-    "/usr/local/bin/python3",      // Intel Homebrew
-    "/usr/bin/python3",            // System
-  ];
-  for (const p of candidates) {
-    try { if (fs.existsSync(p)) return p; } catch (_) {}
+  // Dev mode — try the bundled binary first if it's been built locally,
+  // otherwise spawn python3 directly.
+  const localBundle = path.join(__dirname, "python", "dist", "orchestrate", "orchestrate");
+  if (fs.existsSync(localBundle)) {
+    return { command: localBundle, args: [payloadJSON] };
   }
-  return "python3"; // PATH lookup at spawn time
+  const py = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3"]
+    .find((p) => { try { return fs.existsSync(p); } catch { return false; } }) || "python3";
+  return {
+    command: py,
+    args: [path.join(__dirname, "python", "orchestrate.py"), payloadJSON],
+  };
 }
 
 function setupAutoUpdater() {
@@ -115,10 +115,10 @@ ipcMain.handle("pick-folder", async () => {
 
 // Run the orchestrator. Streams stdout to renderer for live progress.
 ipcMain.handle("run-orchestrator", async (evt, payload) => {
-  const orchestratorPath = getOrchestratorPath();
-  const pythonPath = getPythonPath();
+  const { command, args } = getOrchestratorSpawn(JSON.stringify(payload));
   return new Promise((resolve) => {
-    const p = spawn(pythonPath, [orchestratorPath, JSON.stringify(payload)]);
+    const env = { ...process.env, PB_RESOURCES_DIR: app.isPackaged ? process.resourcesPath : __dirname };
+    const p = spawn(command, args, { env });
     let stdout = "";
     let stderr = "";
     let workDir = null;  // parsed from "[work_dir] <path>" marker on stdout

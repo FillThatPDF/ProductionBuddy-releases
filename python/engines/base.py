@@ -3,11 +3,31 @@ Illustrator, etc.) by binding the AppleScript app name + the JSX templates
 the orchestrator should run. Concrete engines override paths only — the
 script-running mechanics are shared.
 """
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 HERE = Path(__file__).parent
-JSX_ROOT = HERE.parent.parent / "jsx"
+
+# JSX template root resolution:
+#   1. If running inside a PyInstaller bundle (sys.frozen), the binary is at
+#      Contents/Resources/python-engine/orchestrate. Electron-builder ships
+#      jsx/ as a sibling at Contents/Resources/jsx/. Resolve via env var
+#      (PB_RESOURCES_DIR) which main.js sets to process.resourcesPath.
+#   2. Otherwise (dev mode: `npm start`), use the repo layout:
+#      python/engines/base.py → ../../jsx/
+def _resolve_jsx_root():
+    env_dir = os.environ.get("PB_RESOURCES_DIR")
+    if env_dir:
+        return Path(env_dir) / "jsx"
+    if getattr(sys, "frozen", False):
+        # PyInstaller bundle — sys.executable is the binary inside python-engine/
+        return Path(sys.executable).parent.parent / "jsx"
+    return HERE.parent.parent / "jsx"
+
+
+JSX_ROOT = _resolve_jsx_root()
 
 
 class Engine:

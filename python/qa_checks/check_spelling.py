@@ -1,37 +1,38 @@
 """Spellcheck.
 
-Extracts text from the apply_log.txt's Sorted-order block AND the output PDF
-(via PyMuPDF) and runs each token through a dictionary. Tries pyspellchecker
-first (pip install pyspellchecker), falls back to no-op with a flag if not available.
+Extracts all text from the output PDF and runs tokens through a dictionary.
+Text engine: pypdfium2 primary, pdfplumber fallback (via PdfTextExtractor).
 """
 import json
 import re
+import sys
 from pathlib import Path
 
 
 def run(work_dir, deliverables_dir=None):
     findings = []
-    # The PDF is a deliverable — look in deliverables_dir for any *.pdf
-    # whose name matches the version-bumped output (any *.pdf, since this
-    # dir only has the one we just exported).
     search_dir = Path(deliverables_dir) if deliverables_dir else Path(work_dir)
     pdfs = list(search_dir.glob("*.pdf"))
     if not pdfs:
         return findings
-    # Pick the most recently modified PDF (the one we just exported)
     pdf_path = max(pdfs, key=lambda p: p.stat().st_mtime)
 
+    # Make sure the parent python/ dir is importable so we can pick up pdf_text
+    parent = Path(__file__).resolve().parent.parent
+    if str(parent) not in sys.path:
+        sys.path.insert(0, str(parent))
+
     try:
-        import fitz
-        doc = fitz.open(str(pdf_path))
-        text = "\n".join(p.get_text() for p in doc)
+        from pdf_text import PdfTextExtractor
+        with PdfTextExtractor(str(pdf_path)) as ext:
+            text = "\n".join(ext.get_full_page_text(i) for i in range(ext.page_count))
     except Exception as e:
         findings.append({
             "severity": "info",
             "id": "SPELLCHECK_SKIPPED",
             "category": "text",
             "location": "doc",
-            "message": f"Spellcheck skipped (PyMuPDF error: {e})",
+            "message": f"Spellcheck skipped (PDF read error: {e})",
             "autoFix": False,
             "fixAction": "",
         })

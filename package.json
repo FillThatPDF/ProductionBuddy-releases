@@ -78,11 +78,8 @@
     ],
     "extraResources": [
       {
-        "from": "python",
-        "to": "python",
-        "filter": [
-          "**/*.py"
-        ]
+        "from": "python/dist/orchestrate",
+        "to": "python-engine"
       },
       {
         "from": "jsx",
