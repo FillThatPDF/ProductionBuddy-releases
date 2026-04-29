@@ -42,7 +42,16 @@
     </div>
 
     <div class="step">
-      <label>④ Reference files <span class="optional">(optional)</span></label>
+      <label>④ Hi-res images folder <span class="optional">(optional)</span></label>
+      <p class="hint">Folder containing the hi-res versions of any watermarked stock-photo comps used in the doc (typically the job's Box "Images" folder). The app extracts each placed image's stock-photo ID (Getty / AdobeStock / Shutterstock numeric ID) and re-links to the matching hi-res file — with or without an <code>ICF_</code> prefix.</p>
+      <div class="pick-row">
+        <input id="hiResImagesPath" type="text" readonly placeholder="No folder selected…" />
+        <button id="pickHiResImages">Browse…</button>
+      </div>
+    </div>
+
+    <div class="step">
+      <label>⑤ Reference files <span class="optional">(optional)</span></label>
       <p class="hint">Other assets the markup references — .indd, .pdf, .ai, .psd, images. The app will match them to the appropriate annotation and append/place them automatically.</p>
       <div id="refFilesList" class="ref-files-list"></div>
       <div class="pick-row">

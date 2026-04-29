@@ -727,6 +727,15 @@ def main():
         if relinked:
             log(f"[orchestrate]   auto-relinked {len(relinked)} missing asset(s); PDF re-exported")
 
+    # 7b. Hi-res image swap: if the user provided a hi-res images folder,
+    # find every placed image whose filename looks like a watermarked
+    # stock-photo comp (Getty / AdobeStock / Shutterstock / iStock pattern)
+    # and re-link to the matching hi-res file by photo ID.
+    hires_folder = payload.get("hiResImagesFolder")
+    if hires_folder and engine.relink_template:
+        run_hires_swap(work_dir, work_indd, out_pdf, log_path, log,
+                       doc_inspection, hires_folder, engine)
+
     # 8. Auto-activate fonts: for each FONT_UNAVAILABLE finding, try
     # FontExplorer X Pro activation; for the rest, surface Adobe Fonts URL.
     if settings.get("autoActivateFonts", True):
@@ -797,6 +806,96 @@ def run_classifier_cascade(annotations, doc_inspection, ref_inventory, log_fn, s
         log_fn(f"[orchestrate]   Ollama step skipped: {e}")
 
     return plan
+
+
+def run_hires_swap(work_dir, work_indd, out_pdf, log_path, log_fn,
+                   doc_inspection, hires_folder, engine=None):
+    """For every placed image whose filename looks like a watermarked stock
+    comp, search `hires_folder` for a hi-res counterpart (matched by photo
+    ID) and re-link via the existing relink.jsx pipeline. Also re-exports
+    the PDF so the final output uses the hi-res versions.
+
+    Surfaces findings as IMG_HIRES_SWAPPED (info, autoFix=True) per swap and
+    IMG_HIRES_NOT_FOUND (warning) for stock comps with no match.
+    """
+    sys.path.insert(0, str(HERE))
+    try:
+        from hires_swap import plan_swaps, looks_like_stock_comp, extract_photo_id
+    except Exception as e:
+        log_fn(f"[orchestrate]   hi-res swap: import failed: {e}")
+        return []
+
+    placed = (doc_inspection or {}).get("placed_images") or []
+    placed_paths = [p.get("path") or p.get("name") or "" for p in placed]
+    if not placed_paths:
+        log_fn("[orchestrate]   hi-res swap: no placed images in inspection — skipping")
+        return []
+
+    swaps = plan_swaps(placed_paths, hires_folder)
+    log_fn(f"[orchestrate] step 7b: hi-res swap — folder={hires_folder}")
+    log_fn(f"[orchestrate]   placed images: {len(placed_paths)}, "
+           f"stock comps: {sum(1 for p in placed_paths if looks_like_stock_comp(Path(p).name))}, "
+           f"matched: {len(swaps)}")
+
+    findings_path = Path(work_dir) / "findings.json"
+
+    # Surface "no match" findings for stock comps that had no hi-res hit.
+    matched_names = {s["source_filename"] for s in swaps}
+    not_found = []
+    for p in placed_paths:
+        name = Path(p).name
+        if not looks_like_stock_comp(name):
+            continue
+        if name in matched_names:
+            continue
+        pid = extract_photo_id(name)
+        not_found.append({"name": name, "id": pid or ""})
+
+    if not_found:
+        sample = ", ".join(n["name"] for n in not_found[:5])
+        merge_findings(findings_path, [{
+            "severity": "warning",
+            "id": "IMG_HIRES_NOT_FOUND",
+            "category": "links",
+            "location": "doc",
+            "message": f"{len(not_found)} stock-photo comp(s) had no hi-res match in folder: {sample}",
+            "autoFix": False,
+            "fixAction": "Verify the hi-res folder contains the licensed versions, "
+                         "or download the hi-res files into Box first.",
+        }])
+
+    if not swaps:
+        return []
+
+    # Write relinks.json + run relink.jsx (same template as auto-relink)
+    relinks_path = Path(work_dir) / "relinks_hires.json"
+    relinks_path.write_text(json.dumps(swaps, indent=2))
+
+    relink_jsx = Path(work_dir) / "relink_hires.jsx"
+    render_template(engine.relink_template, {
+        "__INDD_PATH__":    str(work_indd),
+        "__PDF_OUT_PATH__": str(out_pdf),
+        "__RELINKS_PATH__": str(relinks_path),
+        "__LOG_PATH__":     str(log_path),
+    }, relink_jsx)
+    proc = run_indesign_script(relink_jsx, timeout=600, engine=engine)
+    if proc.returncode != 0:
+        log_fn(f"[orchestrate]   hi-res swap relink failed: {proc.stderr}")
+        return []
+
+    # Surface success findings — one summary entry plus per-swap detail
+    sample = ", ".join(s["source_filename"] for s in swaps[:5])
+    merge_findings(findings_path, [{
+        "severity": "info",
+        "id": "IMG_HIRES_SWAPPED",
+        "category": "links",
+        "location": "doc",
+        "message": f"Auto-swapped {len(swaps)} watermarked comp(s) → hi-res: {sample}",
+        "autoFix": True,
+        "fixAction": "Verify each replacement matches the design intent.",
+    }])
+    log_fn(f"[orchestrate]   hi-res swap: relinked {len(swaps)} image(s); PDF re-exported")
+    return swaps
 
 
 def run_auto_relink(work_dir, work_indd, out_pdf, log_path, log_fn, engine=None):

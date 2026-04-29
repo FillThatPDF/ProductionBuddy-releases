@@ -1423,17 +1423,17 @@
   ('engines.base',
    '/Users/36981/Desktop/Prdouction AI/InDesignEditor/python/engines/base.py',
    'PYMODULE'),
-  ('codeop',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/codeop.py',
-   'PYMODULE'),
-  ('_py_abc',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_py_abc.py',
-   'PYMODULE'),
   ('_py_warnings',
    '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_py_warnings.py',
    'PYMODULE'),
   ('tracemalloc',
    '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/tracemalloc.py',
+   'PYMODULE'),
+  ('_py_abc',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_py_abc.py',
+   'PYMODULE'),
+  ('codeop',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/codeop.py',
    'PYMODULE'),
   ('inspect',
    '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/inspect.py',
@@ -1453,6 +1453,9 @@
   ('qa_checks.check_link_recovery',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/python/qa_checks/check_link_recovery.py',
+   'PYMODULE'),
+  ('hires_swap',
+   '/Users/36981/Desktop/Prdouction AI/InDesignEditor/python/hires_swap.py',
    'PYMODULE'),
   ('ollama_client',
    '/Users/36981/Desktop/Prdouction AI/InDesignEditor/python/ollama_client.py',
@@ -2120,6 +2123,10 @@
   ('libssl.3.dylib',
    '/opt/homebrew/opt/openssl@3/lib/libssl.3.dylib',
    'BINARY'),
+  ('PIL/.dylibs/libwebpmux.3.dylib',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/PIL/.dylibs/libwebpmux.3.dylib',
+   'BINARY'),
   ('PIL/.dylibs/libwebpdemux.2.dylib',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/PIL/.dylibs/libwebpdemux.2.dylib',
@@ -2127,10 +2134,6 @@
   ('PIL/.dylibs/libwebp.7.dylib',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/PIL/.dylibs/libwebp.7.dylib',
-   'BINARY'),
-  ('PIL/.dylibs/libwebpmux.3.dylib',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/PIL/.dylibs/libwebpmux.3.dylib',
    'BINARY'),
   ('PIL/.dylibs/libavif.16.4.1.dylib',
    '/Users/36981/Desktop/Prdouction '
@@ -2148,17 +2151,13 @@
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/PIL/.dylibs/liblcms2.2.dylib',
    'BINARY'),
-  ('PIL/.dylibs/libz.1.3.1.zlib-ng.dylib',
+  ('PIL/.dylibs/libxcb.1.1.0.dylib',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/PIL/.dylibs/libz.1.3.1.zlib-ng.dylib',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/PIL/.dylibs/libxcb.1.1.0.dylib',
    'BINARY'),
   ('PIL/.dylibs/libtiff.6.dylib',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/PIL/.dylibs/libtiff.6.dylib',
-   'BINARY'),
-  ('PIL/.dylibs/libxcb.1.1.0.dylib',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/PIL/.dylibs/libxcb.1.1.0.dylib',
    'BINARY'),
   ('PIL/.dylibs/libjpeg.62.4.0.dylib',
    '/Users/36981/Desktop/Prdouction '
@@ -2167,6 +2166,10 @@
   ('PIL/.dylibs/libopenjp2.2.5.4.dylib',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/PIL/.dylibs/libopenjp2.2.5.4.dylib',
+   'BINARY'),
+  ('PIL/.dylibs/libz.1.3.1.zlib-ng.dylib',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/PIL/.dylibs/libz.1.3.1.zlib-ng.dylib',
    'BINARY'),
   ('pikepdf/.dylibs/libqpdf.30.3.2.dylib',
    '/Users/36981/Desktop/Prdouction '
@@ -2184,13 +2187,13 @@
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/PIL/.dylibs/libpng16.16.dylib',
    'BINARY'),
-  ('PIL/.dylibs/liblzma.5.dylib',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/PIL/.dylibs/liblzma.5.dylib',
-   'BINARY'),
   ('PIL/.dylibs/libXau.6.dylib',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/PIL/.dylibs/libXau.6.dylib',
+   'BINARY'),
+  ('PIL/.dylibs/liblzma.5.dylib',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/PIL/.dylibs/liblzma.5.dylib',
    'BINARY'),
   ('pikepdf/.dylibs/libjpeg.8.3.2.dylib',
    '/Users/36981/Desktop/Prdouction '
@@ -2204,243 +2207,259 @@
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/PIL/.dylibs/libbrotlicommon.1.2.0.dylib',
    'BINARY'),
-  ('pikepdf/.dylibs/libunistring.5.dylib',
+  ('pikepdf/.dylibs/libp11-kit.0.dylib',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pikepdf/.dylibs/libunistring.5.dylib',
-   'BINARY'),
-  ('pikepdf/.dylibs/libidn2.0.dylib',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pikepdf/.dylibs/libidn2.0.dylib',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pikepdf/.dylibs/libp11-kit.0.dylib',
    'BINARY'),
   ('pikepdf/.dylibs/libintl.8.dylib',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pikepdf/.dylibs/libintl.8.dylib',
    'BINARY'),
+  ('pikepdf/.dylibs/libidn2.0.dylib',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pikepdf/.dylibs/libidn2.0.dylib',
+   'BINARY'),
+  ('pikepdf/.dylibs/libunistring.5.dylib',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pikepdf/.dylibs/libunistring.5.dylib',
+   'BINARY'),
   ('pikepdf/.dylibs/libtasn1.6.dylib',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pikepdf/.dylibs/libtasn1.6.dylib',
+   'BINARY'),
+  ('pikepdf/.dylibs/libgmp.10.dylib',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pikepdf/.dylibs/libgmp.10.dylib',
    'BINARY'),
   ('pikepdf/.dylibs/libnettle.8.11.dylib',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pikepdf/.dylibs/libnettle.8.11.dylib',
    'BINARY'),
-  ('pikepdf/.dylibs/libp11-kit.0.dylib',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pikepdf/.dylibs/libp11-kit.0.dylib',
-   'BINARY'),
   ('pikepdf/.dylibs/libhogweed.6.11.dylib',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pikepdf/.dylibs/libhogweed.6.11.dylib',
-   'BINARY'),
-  ('pikepdf/.dylibs/libgmp.10.dylib',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pikepdf/.dylibs/libgmp.10.dylib',
    'BINARY')],
  [],
  [],
- [('pdfminer/cmap/GB-H.json.gz',
+ [('pdfminer/cmap/HKgccs-B5-H.json.gz',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GB-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/ETenms-B5-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/ETenms-B5-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/B5pc-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/B5pc-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/HKm314-B5-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKm314-B5-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/CNS2-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/CNS2-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniKS-UTF8-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniKS-UTF8-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/ETenms-B5-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/ETenms-B5-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/RKSJ-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/RKSJ-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJIS-UCS2-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UCS2-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/78ms-RKSJ-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/78ms-RKSJ-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniKS-UTF32-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniKS-UTF32-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/GBTpc-EUC-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBTpc-EUC-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniKS-UTF16-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniKS-UTF16-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/78-EUC-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/78-EUC-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/KSCms-UHC-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSCms-UHC-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/90msp-RKSJ-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/90msp-RKSJ-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniGB-UCS2-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniGB-UCS2-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/KSC-Johab-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSC-Johab-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/ETen-B5-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/ETen-B5-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/Ext-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Ext-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/Add-RKSJ-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Add-RKSJ-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJIS-UTF32-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UTF32-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/GBpc-EUC-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBpc-EUC-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniCNS-UTF16-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniCNS-UTF16-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJIS2004-UTF16-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS2004-UTF16-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/78-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/78-H.json.gz',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKgccs-B5-H.json.gz',
    'DATA'),
   ('pdfminer/cmap/HKdlb-B5-V.json.gz',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKdlb-B5-V.json.gz',
    'DATA'),
+  ('pdfminer/cmap/to-unicode-Adobe-GB1.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/to-unicode-Adobe-GB1.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJISX0213-UTF32-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJISX0213-UTF32-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniKS-UTF8-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniKS-UTF8-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniGB-UTF8-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniGB-UTF8-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/KSCms-UHC-HW-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSCms-UHC-HW-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/to-unicode-Adobe-CNS1.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/to-unicode-Adobe-CNS1.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniCNS-UCS2-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniCNS-UCS2-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/KSCms-UHC-HW-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSCms-UHC-HW-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/78ms-RKSJ-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/78ms-RKSJ-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/KSCms-UHC-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSCms-UHC-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/78-EUC-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/78-EUC-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/Katakana-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Katakana-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/B5pc-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/B5pc-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/RKSJ-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/RKSJ-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/GB-EUC-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GB-EUC-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniGB-UTF32-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniGB-UTF32-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniCNS-UTF8-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniCNS-UTF8-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/RKSJ-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/RKSJ-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJIS2004-UTF8-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS2004-UTF8-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/HKm314-B5-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKm314-B5-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/90ms-RKSJ-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/90ms-RKSJ-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniKS-UCS2-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniKS-UCS2-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/CNS-EUC-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/CNS-EUC-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/KSCpc-EUC-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSCpc-EUC-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/GB-EUC-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GB-EUC-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/90msp-RKSJ-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/90msp-RKSJ-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniCNS-UCS2-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniCNS-UCS2-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJIS-UTF8-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UTF8-V.json.gz',
+   'DATA'),
   ('pdfminer/cmap/CNS1-H.json.gz',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/CNS1-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/to-unicode-Adobe-Korea1.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/to-unicode-Adobe-Korea1.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/90pv-RKSJ-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/90pv-RKSJ-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/ETHK-B5-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/ETHK-B5-V.json.gz',
    'DATA'),
   ('pdfminer/cmap/GBK2K-H.json.gz',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBK2K-H.json.gz',
    'DATA'),
-  ('pdfminer/cmap/UniJIS-UTF16-H.json.gz',
+  ('pdfminer/cmap/GBTpc-EUC-H.json.gz',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UTF16-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/GBT-EUC-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBT-EUC-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/GBTpc-EUC-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBTpc-EUC-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/Katakana-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Katakana-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/HKm471-B5-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKm471-B5-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/WP-Symbol-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/WP-Symbol-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/CNS2-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/CNS2-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/78-RKSJ-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/78-RKSJ-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/GBK-EUC-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBK-EUC-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/GBT-EUC-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBT-EUC-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/EUC-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/EUC-H.json.gz',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBTpc-EUC-H.json.gz',
    'DATA'),
   ('pdfminer/cmap/UniJISX02132004-UTF32-V.json.gz',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJISX02132004-UTF32-V.json.gz',
    'DATA'),
-  ('pdfminer/cmap/HKdla-B5-V.json.gz',
+  ('pdfminer/cmap/HKm314-B5-V.json.gz',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKdla-B5-V.json.gz',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKm314-B5-V.json.gz',
    'DATA'),
-  ('pdfminer/cmap/B5-H.json.gz',
+  ('pdfminer/cmap/90pv-RKSJ-H.json.gz',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/B5-H.json.gz',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/90pv-RKSJ-H.json.gz',
    'DATA'),
-  ('pdfminer/cmap/HKscs-B5-V.json.gz',
+  ('pdfminer/cmap/78-EUC-V.json.gz',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKscs-B5-V.json.gz',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/78-EUC-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniGB-UTF16-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniGB-UTF16-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/78-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/78-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJIS-UCS2-HW-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UCS2-HW-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/README.txt',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/README.txt',
+   'DATA'),
+  ('pdfminer/cmap/UniCNS-UTF8-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniCNS-UTF8-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJIS-UCS2-HW-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UCS2-HW-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/GBT-EUC-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBT-EUC-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/83pv-RKSJ-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/83pv-RKSJ-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/WP-Symbol-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/WP-Symbol-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniKS-UTF16-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniKS-UTF16-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/KSC-Johab-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSC-Johab-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/ETHK-B5-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/ETHK-B5-H.json.gz',
    'DATA'),
   ('pdfminer/cmap/KSC-H.json.gz',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSC-H.json.gz',
    'DATA'),
-  ('pdfminer/cmap/Hiragana-V.json.gz',
+  ('pdfminer/cmap/GBT-EUC-V.json.gz',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Hiragana-V.json.gz',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBT-EUC-V.json.gz',
    'DATA'),
-  ('pdfminer/cmap/UniGB-UTF8-V.json.gz',
+  ('pdfminer/cmap/78-RKSJ-V.json.gz',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniGB-UTF8-V.json.gz',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/78-RKSJ-V.json.gz',
    'DATA'),
-  ('pdfminer/cmap/UniJIS2004-UTF32-H.json.gz',
+  ('pdfminer/cmap/KSC-EUC-H.json.gz',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS2004-UTF32-H.json.gz',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSC-EUC-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJIS-UTF16-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UTF16-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/NWP-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/NWP-H.json.gz',
    'DATA'),
   ('pdfminer/cmap/CNS-EUC-V.json.gz',
    '/Users/36981/Desktop/Prdouction '
@@ -2450,429 +2469,413 @@
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/NWP-V.json.gz',
    'DATA'),
-  ('pdfminer/cmap/UniCNS-UTF8-H.json.gz',
+  ('pdfminer/cmap/HKdla-B5-V.json.gz',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniCNS-UTF8-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/B5-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/B5-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/Ext-RKSJ-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Ext-RKSJ-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJISX02132004-UTF32-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJISX02132004-UTF32-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJIS-UCS2-HW-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UCS2-HW-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/GBK2K-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBK2K-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniCNS-UTF32-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniCNS-UTF32-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJIS-UCS2-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UCS2-H.json.gz',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKdla-B5-V.json.gz',
    'DATA'),
   ('pdfminer/cmap/KSC-EUC-V.json.gz',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSC-EUC-V.json.gz',
    'DATA'),
-  ('pdfminer/cmap/Ext-H.json.gz',
+  ('pdfminer/cmap/B5-V.json.gz',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Ext-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/to-unicode-Adobe-GB1.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/to-unicode-Adobe-GB1.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/78-EUC-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/78-EUC-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/Add-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Add-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/H.json.gz',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/B5-V.json.gz',
    'DATA'),
   ('pdfminer/cmap/KSC-Johab-V.json.gz',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSC-Johab-V.json.gz',
    'DATA'),
-  ('pdfminer/py.typed',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/py.typed',
-   'DATA'),
-  ('pdfminer/cmap/README.txt',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/README.txt',
-   'DATA'),
-  ('pdfminer/cmap/78-RKSJ-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/78-RKSJ-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/CNS-EUC-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/CNS-EUC-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniKS-UCS2-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniKS-UCS2-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/Hiragana-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Hiragana-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniCNS-UCS2-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniCNS-UCS2-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/GBpc-EUC-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBpc-EUC-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/GBKp-EUC-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBKp-EUC-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/EUC-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/EUC-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/Roman-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Roman-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniCNS-UTF32-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniCNS-UTF32-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniCNS-UCS2-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniCNS-UCS2-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJIS2004-UTF32-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS2004-UTF32-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/GBT-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBT-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJIS-UTF8-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UTF8-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/KSC-EUC-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSC-EUC-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniKS-UTF16-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniKS-UTF16-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/HKgccs-B5-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKgccs-B5-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/HKscs-B5-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKscs-B5-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJIS2004-UTF16-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS2004-UTF16-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/GBKp-EUC-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBKp-EUC-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/B5pc-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/B5pc-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/90pv-RKSJ-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/90pv-RKSJ-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/KSCms-UHC-HW-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSCms-UHC-HW-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/90msp-RKSJ-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/90msp-RKSJ-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/HKm471-B5-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKm471-B5-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/Roman-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Roman-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/RKSJ-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/RKSJ-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJIS2004-UTF8-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS2004-UTF8-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJIS-UTF16-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UTF16-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/Hankaku-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Hankaku-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/Katakana-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Katakana-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJIS-UCS2-HW-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UCS2-HW-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/KSCpc-EUC-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSCpc-EUC-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/Add-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Add-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/HKm314-B5-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKm314-B5-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/HKdlb-B5-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKdlb-B5-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/KSCms-UHC-HW-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSCms-UHC-HW-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniCNS-UTF8-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniCNS-UTF8-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/Add-RKSJ-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Add-RKSJ-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniGB-UTF32-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniGB-UTF32-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/GBT-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBT-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniGB-UTF8-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniGB-UTF8-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJISX0213-UTF32-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJISX0213-UTF32-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJISX0213-UTF32-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJISX0213-UTF32-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/KSCms-UHC-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSCms-UHC-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/78-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/78-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/ETHK-B5-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/ETHK-B5-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJIS-UTF8-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UTF8-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/HKgccs-B5-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKgccs-B5-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/to-unicode-Adobe-CNS1.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/to-unicode-Adobe-CNS1.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/GBK-EUC-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBK-EUC-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniGB-UTF16-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniGB-UTF16-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniKS-UTF8-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniKS-UTF8-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/HKdla-B5-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKdla-B5-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/Hankaku-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Hankaku-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniCNS-UTF16-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniCNS-UTF16-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniKS-UCS2-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniKS-UCS2-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/ETen-B5-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/ETen-B5-V.json.gz',
-   'DATA'),
   ('pdfminer/cmap/V.json.gz',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJIS-UTF32-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UTF32-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniJIS2004-UTF8-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS2004-UTF8-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/CNS1-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/CNS1-V.json.gz',
    'DATA'),
   ('pdfminer/cmap/UniGB-UCS2-V.json.gz',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniGB-UCS2-V.json.gz',
    'DATA'),
-  ('pdfminer/cmap/83pv-RKSJ-H.json.gz',
+  ('pdfminer/cmap/HKdlb-B5-H.json.gz',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/83pv-RKSJ-H.json.gz',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKdlb-B5-H.json.gz',
    'DATA'),
-  ('pdfminer/cmap/KSCpc-EUC-V.json.gz',
+  ('pdfminer/cmap/ETen-B5-H.json.gz',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSCpc-EUC-V.json.gz',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/ETen-B5-H.json.gz',
    'DATA'),
-  ('pdfminer/cmap/UniKS-UTF32-H.json.gz',
+  ('pdfminer/cmap/UniJIS2004-UTF32-V.json.gz',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniKS-UTF32-H.json.gz',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS2004-UTF32-V.json.gz',
    'DATA'),
-  ('pdfminer/cmap/WP-Symbol-H.json.gz',
+  ('pdfminer/cmap/90pv-RKSJ-V.json.gz',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/WP-Symbol-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/78ms-RKSJ-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/78ms-RKSJ-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniGB-UTF32-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniGB-UTF32-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/83pv-RKSJ-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/83pv-RKSJ-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/90ms-RKSJ-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/90ms-RKSJ-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/UniGB-UTF16-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniGB-UTF16-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/90ms-RKSJ-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/90ms-RKSJ-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/Ext-RKSJ-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Ext-RKSJ-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/GB-EUC-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GB-EUC-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/NWP-H.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/NWP-H.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/GB-EUC-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GB-EUC-V.json.gz',
-   'DATA'),
-  ('pdfminer/cmap/KSC-V.json.gz',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSC-V.json.gz',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/90pv-RKSJ-V.json.gz',
    'DATA'),
   ('pdfminer/cmap/to-unicode-Adobe-Japan1.json.gz',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/to-unicode-Adobe-Japan1.json.gz',
    'DATA'),
+  ('pdfminer/cmap/KSC-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSC-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/Hiragana-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Hiragana-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/78ms-RKSJ-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/78ms-RKSJ-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/GBT-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBT-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/to-unicode-Adobe-Korea1.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/to-unicode-Adobe-Korea1.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/GB-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GB-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/GBTpc-EUC-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBTpc-EUC-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/90msp-RKSJ-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/90msp-RKSJ-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/B5-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/B5-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniGB-UCS2-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniGB-UCS2-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJIS2004-UTF8-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS2004-UTF8-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/CNS1-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/CNS1-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/CNS2-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/CNS2-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/Ext-RKSJ-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Ext-RKSJ-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJIS-UTF16-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UTF16-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/EUC-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/EUC-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/ETenms-B5-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/ETenms-B5-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/Katakana-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Katakana-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/HKdla-B5-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKdla-B5-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJIS2004-UTF16-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS2004-UTF16-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/KSCpc-EUC-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSCpc-EUC-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/GBK-EUC-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBK-EUC-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniGB-UTF8-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniGB-UTF8-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/GBKp-EUC-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBKp-EUC-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/GBT-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBT-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniCNS-UTF32-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniCNS-UTF32-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniCNS-UTF16-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniCNS-UTF16-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/Hankaku-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Hankaku-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/Add-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Add-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJIS-UTF32-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UTF32-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJIS2004-UTF16-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS2004-UTF16-V.json.gz',
+   'DATA'),
+  ('pdfminer/py.typed',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/py.typed',
+   'DATA'),
+  ('pdfminer/cmap/UniJIS-UCS2-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UCS2-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniKS-UTF8-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniKS-UTF8-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/Roman-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Roman-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/HKgccs-B5-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKgccs-B5-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/WP-Symbol-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/WP-Symbol-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/KSCms-UHC-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/KSCms-UHC-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/GBK-EUC-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBK-EUC-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/Hankaku-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Hankaku-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/ETen-B5-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/ETen-B5-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/Hiragana-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Hiragana-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/ETHK-B5-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/ETHK-B5-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/Add-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Add-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJIS-UCS2-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UCS2-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/Ext-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Ext-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/HKscs-B5-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKscs-B5-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJIS-UTF32-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UTF32-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/Ext-RKSJ-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Ext-RKSJ-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/78-RKSJ-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/78-RKSJ-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/78-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/78-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniCNS-UTF32-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniCNS-UTF32-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniCNS-UTF16-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniCNS-UTF16-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/EUC-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/EUC-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniKS-UTF32-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniKS-UTF32-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/ETenms-B5-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/ETenms-B5-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/Add-RKSJ-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Add-RKSJ-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJIS-UTF8-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS-UTF8-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniKS-UCS2-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniKS-UCS2-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/GBpc-EUC-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBpc-EUC-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniKS-UTF32-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniKS-UTF32-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/Add-RKSJ-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Add-RKSJ-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/GBK2K-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBK2K-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJISX0213-UTF32-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJISX0213-UTF32-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniGB-UTF32-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniGB-UTF32-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/HKm471-B5-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKm471-B5-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/CNS2-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/CNS2-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/GBpc-EUC-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBpc-EUC-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/83pv-RKSJ-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/83pv-RKSJ-H.json.gz',
+   'DATA'),
   ('pdfminer/cmap/GB-V.json.gz',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GB-V.json.gz',
    'DATA'),
-  ('cryptography-47.0.0.dist-info/sboms/sbom.json',
+  ('pdfminer/cmap/B5pc-H.json.gz',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/cryptography-47.0.0.dist-info/sboms/sbom.json',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/B5pc-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJISX02132004-UTF32-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJISX02132004-UTF32-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/HKscs-B5-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKscs-B5-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniGB-UTF16-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniGB-UTF16-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/90ms-RKSJ-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/90ms-RKSJ-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/Ext-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Ext-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/Roman-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/Roman-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniKS-UTF16-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniKS-UTF16-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/UniJIS2004-UTF32-H.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/UniJIS2004-UTF32-H.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/GBKp-EUC-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/GBKp-EUC-V.json.gz',
+   'DATA'),
+  ('pdfminer/cmap/HKm471-B5-V.json.gz',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer/cmap/HKm471-B5-V.json.gz',
    'DATA'),
   ('cryptography-47.0.0.dist-info/INSTALLER',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/cryptography-47.0.0.dist-info/INSTALLER',
    'DATA'),
-  ('cryptography-47.0.0.dist-info/RECORD',
+  ('cryptography-47.0.0.dist-info/sboms/sbom.json',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/cryptography-47.0.0.dist-info/RECORD',
-   'DATA'),
-  ('cryptography-47.0.0.dist-info/WHEEL',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/cryptography-47.0.0.dist-info/WHEEL',
-   'DATA'),
-  ('cryptography-47.0.0.dist-info/licenses/LICENSE.APACHE',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/cryptography-47.0.0.dist-info/licenses/LICENSE.APACHE',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/cryptography-47.0.0.dist-info/sboms/sbom.json',
    'DATA'),
   ('cryptography-47.0.0.dist-info/METADATA',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/cryptography-47.0.0.dist-info/METADATA',
    'DATA'),
-  ('cryptography-47.0.0.dist-info/licenses/LICENSE.BSD',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/cryptography-47.0.0.dist-info/licenses/LICENSE.BSD',
-   'DATA'),
   ('cryptography-47.0.0.dist-info/sboms/cryptography-rust.cyclonedx.json',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/cryptography-47.0.0.dist-info/sboms/cryptography-rust.cyclonedx.json',
    'DATA'),
+  ('cryptography-47.0.0.dist-info/WHEEL',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/cryptography-47.0.0.dist-info/WHEEL',
+   'DATA'),
   ('cryptography-47.0.0.dist-info/licenses/LICENSE',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/cryptography-47.0.0.dist-info/licenses/LICENSE',
+   'DATA'),
+  ('cryptography-47.0.0.dist-info/licenses/LICENSE.BSD',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/cryptography-47.0.0.dist-info/licenses/LICENSE.BSD',
+   'DATA'),
+  ('cryptography-47.0.0.dist-info/RECORD',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/cryptography-47.0.0.dist-info/RECORD',
+   'DATA'),
+  ('cryptography-47.0.0.dist-info/licenses/LICENSE.APACHE',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/cryptography-47.0.0.dist-info/licenses/LICENSE.APACHE',
    'DATA'),
   ('pypdfium2/version.json',
    '/Users/36981/Desktop/Prdouction '
@@ -2882,9 +2885,9 @@
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pypdfium2_raw/version.json',
    'DATA'),
-  ('lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_schematron_skeleton_for_xslt1.xsl',
+  ('lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_schematron_message.xsl',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_schematron_skeleton_for_xslt1.xsl',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_schematron_message.xsl',
    'DATA'),
   ('lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_svrl_for_xslt1.xsl',
    '/Users/36981/Desktop/Prdouction '
@@ -2894,10 +2897,6 @@
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_dsdl_include.xsl',
    'DATA'),
-  ('lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_abstract_expand.xsl',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_abstract_expand.xsl',
-   'DATA'),
   ('lxml/isoschematron/resources/xsl/RNG2Schtrn.xsl',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/lxml/isoschematron/resources/xsl/RNG2Schtrn.xsl',
@@ -2906,62 +2905,66 @@
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/readme.txt',
    'DATA'),
-  ('lxml/isoschematron/resources/xsl/XSD2Schtrn.xsl',
+  ('lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_schematron_skeleton_for_xslt1.xsl',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/lxml/isoschematron/resources/xsl/XSD2Schtrn.xsl',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_schematron_skeleton_for_xslt1.xsl',
    'DATA'),
   ('lxml/isoschematron/resources/rng/iso-schematron.rng',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/lxml/isoschematron/resources/rng/iso-schematron.rng',
    'DATA'),
-  ('lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_schematron_message.xsl',
+  ('lxml/isoschematron/resources/xsl/XSD2Schtrn.xsl',
    '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_schematron_message.xsl',
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/lxml/isoschematron/resources/xsl/XSD2Schtrn.xsl',
+   'DATA'),
+  ('lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_abstract_expand.xsl',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/lxml/isoschematron/resources/xsl/iso-schematron-xslt1/iso_abstract_expand.xsl',
    'DATA'),
   ('Python', 'Python.framework/Versions/3.14/Python', 'SYMLINK'),
-  ('pdfminer_six-20251230.dist-info/top_level.txt',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer_six-20251230.dist-info/top_level.txt',
-   'DATA'),
-  ('pdfminer_six-20251230.dist-info/RECORD',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer_six-20251230.dist-info/RECORD',
-   'DATA'),
   ('pdfminer_six-20251230.dist-info/WHEEL',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer_six-20251230.dist-info/WHEEL',
+   'DATA'),
+  ('pdfminer_six-20251230.dist-info/METADATA',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer_six-20251230.dist-info/METADATA',
+   'DATA'),
+  ('pdfminer_six-20251230.dist-info/top_level.txt',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer_six-20251230.dist-info/top_level.txt',
    'DATA'),
   ('pdfminer_six-20251230.dist-info/INSTALLER',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer_six-20251230.dist-info/INSTALLER',
    'DATA'),
+  ('pdfminer_six-20251230.dist-info/RECORD',
+   '/Users/36981/Desktop/Prdouction '
+   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer_six-20251230.dist-info/RECORD',
+   'DATA'),
   ('pdfminer_six-20251230.dist-info/licenses/LICENSE',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer_six-20251230.dist-info/licenses/LICENSE',
-   'DATA'),
-  ('pdfminer_six-20251230.dist-info/METADATA',
-   '/Users/36981/Desktop/Prdouction '
-   'AI/InDesignEditor/pyenv/lib/python3.14/site-packages/pdfminer_six-20251230.dist-info/METADATA',
    'DATA'),
   ('base_library.zip',
    '/Users/36981/Desktop/Prdouction '
    'AI/InDesignEditor/python/build/orchestrate/base_library.zip',
    'DATA'),
   ('liblzma.5.dylib', 'PIL/.dylibs/liblzma.5.dylib', 'SYMLINK'),
+  ('libwebpmux.3.dylib', 'PIL/.dylibs/libwebpmux.3.dylib', 'SYMLINK'),
   ('libwebpdemux.2.dylib', 'PIL/.dylibs/libwebpdemux.2.dylib', 'SYMLINK'),
   ('libwebp.7.dylib', 'PIL/.dylibs/libwebp.7.dylib', 'SYMLINK'),
-  ('libwebpmux.3.dylib', 'PIL/.dylibs/libwebpmux.3.dylib', 'SYMLINK'),
   ('libavif.16.4.1.dylib', 'PIL/.dylibs/libavif.16.4.1.dylib', 'SYMLINK'),
   ('libfreetype.6.dylib', 'PIL/.dylibs/libfreetype.6.dylib', 'SYMLINK'),
   ('libharfbuzz.0.dylib', 'PIL/.dylibs/libharfbuzz.0.dylib', 'SYMLINK'),
   ('liblcms2.2.dylib', 'PIL/.dylibs/liblcms2.2.dylib', 'SYMLINK'),
+  ('libxcb.1.1.0.dylib', 'PIL/.dylibs/libxcb.1.1.0.dylib', 'SYMLINK'),
+  ('libtiff.6.dylib', 'PIL/.dylibs/libtiff.6.dylib', 'SYMLINK'),
+  ('libjpeg.62.4.0.dylib', 'PIL/.dylibs/libjpeg.62.4.0.dylib', 'SYMLINK'),
+  ('libopenjp2.2.5.4.dylib', 'PIL/.dylibs/libopenjp2.2.5.4.dylib', 'SYMLINK'),
   ('libz.1.3.1.zlib-ng.dylib',
    'PIL/.dylibs/libz.1.3.1.zlib-ng.dylib',
    'SYMLINK'),
-  ('libtiff.6.dylib', 'PIL/.dylibs/libtiff.6.dylib', 'SYMLINK'),
-  ('libxcb.1.1.0.dylib', 'PIL/.dylibs/libxcb.1.1.0.dylib', 'SYMLINK'),
-  ('libjpeg.62.4.0.dylib', 'PIL/.dylibs/libjpeg.62.4.0.dylib', 'SYMLINK'),
-  ('libopenjp2.2.5.4.dylib', 'PIL/.dylibs/libopenjp2.2.5.4.dylib', 'SYMLINK'),
   ('libqpdf.30.3.2.dylib', 'pikepdf/.dylibs/libqpdf.30.3.2.dylib', 'SYMLINK'),
   ('libsharpyuv.0.dylib', 'PIL/.dylibs/libsharpyuv.0.dylib', 'SYMLINK'),
   ('libbrotlidec.1.2.0.dylib',
@@ -2974,82 +2977,58 @@
   ('libbrotlicommon.1.2.0.dylib',
    'PIL/.dylibs/libbrotlicommon.1.2.0.dylib',
    'SYMLINK'),
-  ('libunistring.5.dylib', 'pikepdf/.dylibs/libunistring.5.dylib', 'SYMLINK'),
-  ('libidn2.0.dylib', 'pikepdf/.dylibs/libidn2.0.dylib', 'SYMLINK'),
-  ('libintl.8.dylib', 'pikepdf/.dylibs/libintl.8.dylib', 'SYMLINK'),
-  ('libtasn1.6.dylib', 'pikepdf/.dylibs/libtasn1.6.dylib', 'SYMLINK'),
-  ('libnettle.8.11.dylib', 'pikepdf/.dylibs/libnettle.8.11.dylib', 'SYMLINK'),
   ('libp11-kit.0.dylib', 'pikepdf/.dylibs/libp11-kit.0.dylib', 'SYMLINK'),
-  ('libhogweed.6.11.dylib', 'pikepdf/.dylibs/libhogweed.6.11.dylib', 'SYMLINK'),
+  ('libintl.8.dylib', 'pikepdf/.dylibs/libintl.8.dylib', 'SYMLINK'),
+  ('libidn2.0.dylib', 'pikepdf/.dylibs/libidn2.0.dylib', 'SYMLINK'),
+  ('libunistring.5.dylib', 'pikepdf/.dylibs/libunistring.5.dylib', 'SYMLINK'),
+  ('libtasn1.6.dylib', 'pikepdf/.dylibs/libtasn1.6.dylib', 'SYMLINK'),
   ('libgmp.10.dylib', 'pikepdf/.dylibs/libgmp.10.dylib', 'SYMLINK'),
+  ('libnettle.8.11.dylib', 'pikepdf/.dylibs/libnettle.8.11.dylib', 'SYMLINK'),
+  ('libhogweed.6.11.dylib', 'pikepdf/.dylibs/libhogweed.6.11.dylib', 'SYMLINK'),
   ('Python.framework/Python', 'Versions/Current/Python', 'SYMLINK'),
   ('Python.framework/Resources', 'Versions/Current/Resources', 'SYMLINK'),
   ('Python.framework/Versions/3.14/Resources/Info.plist',
    '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/Resources/Info.plist',
    'DATA'),
   ('Python.framework/Versions/Current', '3.14', 'SYMLINK')],
- [('keyword',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/keyword.py',
+ [('weakref',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/weakref.py',
    'PYMODULE'),
-  ('locale',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/locale.py',
-   'PYMODULE'),
-  ('enum',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/enum.py',
+  ('ntpath',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ntpath.py',
    'PYMODULE'),
   ('sre_constants',
    '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/sre_constants.py',
    'PYMODULE'),
-  ('functools',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/functools.py',
-   'PYMODULE'),
-  ('operator',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/operator.py',
+  ('collections',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/collections/__init__.py',
    'PYMODULE'),
   ('_collections_abc',
    '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_collections_abc.py',
    'PYMODULE'),
-  ('linecache',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/linecache.py',
-   'PYMODULE'),
-  ('reprlib',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/reprlib.py',
-   'PYMODULE'),
-  ('traceback',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/traceback.py',
-   'PYMODULE'),
   ('types',
    '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/types.py',
    'PYMODULE'),
-  ('codecs',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/codecs.py',
-   'PYMODULE'),
-  ('collections',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/collections/__init__.py',
-   'PYMODULE'),
-  ('io',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/io.py',
+  ('sre_parse',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/sre_parse.py',
    'PYMODULE'),
   ('_weakrefset',
    '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/_weakrefset.py',
    'PYMODULE'),
-  ('re._parser',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/re/_parser.py',
+  ('reprlib',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/reprlib.py',
    'PYMODULE'),
-  ('re._constants',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/re/_constants.py',
+  ('posixpath',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/posixpath.py',
    'PYMODULE'),
-  ('re._compiler',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/re/_compiler.py',
+  ('linecache',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/linecache.py',
    'PYMODULE'),
-  ('re._casefix',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/re/_casefix.py',
+  ('codecs',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/codecs.py',
    'PYMODULE'),
-  ('stat',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/stat.py',
-   'PYMODULE'),
-  ('copyreg',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/copyreg.py',
+  ('functools',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/functools.py',
    'PYMODULE'),
   ('encodings.zlib_codec',
    '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/encodings/zlib_codec.py',
@@ -3420,29 +3399,53 @@
   ('encodings',
    '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/encodings/__init__.py',
    'PYMODULE'),
-  ('weakref',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/weakref.py',
-   'PYMODULE'),
-  ('posixpath',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/posixpath.py',
-   'PYMODULE'),
-  ('abc',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/abc.py',
-   'PYMODULE'),
-  ('ntpath',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/ntpath.py',
-   'PYMODULE'),
-  ('sre_parse',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/sre_parse.py',
+  ('warnings',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/warnings.py',
    'PYMODULE'),
   ('sre_compile',
    '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/sre_compile.py',
    'PYMODULE'),
-  ('warnings',
-   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/warnings.py',
+  ('re._parser',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/re/_parser.py',
+   'PYMODULE'),
+  ('re._constants',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/re/_constants.py',
+   'PYMODULE'),
+  ('re._compiler',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/re/_compiler.py',
+   'PYMODULE'),
+  ('re._casefix',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/re/_casefix.py',
+   'PYMODULE'),
+  ('locale',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/locale.py',
+   'PYMODULE'),
+  ('io',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/io.py',
+   'PYMODULE'),
+  ('operator',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/operator.py',
    'PYMODULE'),
   ('heapq',
    '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/heapq.py',
+   'PYMODULE'),
+  ('keyword',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/keyword.py',
+   'PYMODULE'),
+  ('stat',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/stat.py',
+   'PYMODULE'),
+  ('enum',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/enum.py',
+   'PYMODULE'),
+  ('copyreg',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/copyreg.py',
+   'PYMODULE'),
+  ('abc',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/abc.py',
+   'PYMODULE'),
+  ('traceback',
+   '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/traceback.py',
    'PYMODULE'),
   ('genericpath',
    '/opt/homebrew/Cellar/python@3.14/3.14.4/Frameworks/Python.framework/Versions/3.14/lib/python3.14/genericpath.py',

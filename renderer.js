@@ -23,6 +23,8 @@ const FINDING_META = {
   LINK_MISSING:              { title: "Missing linked assets", plain: "InDesign expects to find linked image/asset files at specific paths but they're missing. The output PDF uses InDesign's low-res cached preview, so the layout is preserved — but you should re-link to a hi-res file before final delivery.", fix: "Open Window → Links in InDesign. For each missing item, click the broken-link icon and re-link to the correct file. (See LINK_RECOVERY findings for Box search results and stock-photo URLs.)", canAutoFix: false },
   LINK_RECOVERY:             { title: "Suggested recovery for missing link", plain: "We searched Box for files matching the missing-link filename (with and without ICF_ prefix) and recognized stock-photo IDs. If you see a Box match, that's likely the file to re-link to. If you see a stock URL, click through to re-license/download the asset.", fix: "Verify the suggested file is correct, then in InDesign: Window → Links → select missing item → click broken-link icon → navigate to the suggested file. For stock photos, follow the URL to your licensed account.", canAutoFix: false },
   LINK_AUTO_RELINKED:        { title: "Missing link was auto-relinked from Box", plain: "We found an exact filename match in Box and automatically re-pointed the broken link. The PDF has been re-exported with the recovered asset.", fix: "Verify the relinked file is the version you intended.", canAutoFix: true },
+  IMG_HIRES_SWAPPED:         { title: "Watermarked comp swapped for hi-res", plain: "We detected one or more placed images that look like stock-photo watermarked comps (Getty / AdobeStock / Shutterstock / iStock filename patterns), found matching hi-res files in the folder you provided, and re-linked the InDesign doc. The PDF was re-exported with the licensed images.", fix: "Verify each swap matches the intended licensed asset.", canAutoFix: true },
+  IMG_HIRES_NOT_FOUND:       { title: "Watermarked comp without a hi-res match", plain: "Some placed images look like stock-photo comps but no matching hi-res file was found in the folder you provided. The doc still uses the watermarked version for those.", fix: "Verify the hi-res folder contains the licensed versions (filenames must contain the same numeric photo ID), or download the hi-res files into Box first, then re-run.", canAutoFix: false },
   FONT_UNAVAILABLE:          { title: "Fonts not properly installed", plain: "Fonts used in the document aren't activated. InDesign substitutes which changes line breaks and styling.", fix: "Activate via Adobe Fonts (CC → Fonts) or install the system font. If you don't have a license, replace with an equivalent font and update paragraph styles.", canAutoFix: false },
   FONT_AUTO_ACTIVATED:       { title: "Font auto-activated via FontExplorer X Pro", plain: "We found the missing font in your FontExplorer library and activated it; the PDF was re-exported.", fix: "Verify the activated font matches your design intent.", canAutoFix: true },
   FONT_ADOBE_FONTS_URL:      { title: "Font available on Adobe Fonts", plain: "We couldn't activate this font via FontExplorer X Pro. It may be available on Adobe Fonts — follow the link to activate it via Creative Cloud, then re-run the job.", fix: "Open the Adobe Fonts URL in the message, click Activate, then re-run.", canAutoFix: false },
@@ -63,7 +65,7 @@ const FINDING_META = {
 };
 window.FINDING_META = FINDING_META; // for debugging via devtools
 
-const state = { pdf: null, indd: null, out: null, refFiles: [] };
+const state = { pdf: null, indd: null, out: null, refFiles: [], hiResImages: null };
 
 // ---- Settings: persistence + defaults ----
 const DEFAULT_SETTINGS = {
@@ -129,6 +131,10 @@ $("pickIndd").onclick = async () => {
     { name: "Illustrator", extensions: ["ai"] },
   ]);
   if (p) { state.indd = p; $("inddPath").value = p; updateRunButton(); }
+};
+$("pickHiResImages").onclick = async () => {
+  const p = await ipcRenderer.invoke("pick-folder");
+  if (p) { state.hiResImages = p; $("hiResImagesPath").value = p; }
 };
 $("pickOut").onclick = async () => {
   const p = await ipcRenderer.invoke("pick-folder");
@@ -345,6 +351,21 @@ setupDropZone(
   }
 );
 
+// Hi-res images folder zone — folder drop only (or any file → use parent dir)
+setupDropZone(
+  $("hiResImagesPath").closest(".step"),
+  (p) => true,
+  (paths) => {
+    let dir = paths[0];
+    if (!isFolder(dir)) {
+      try { dir = path.dirname(dir); } catch (e) { return; }
+    }
+    state.hiResImages = dir;
+    $("hiResImagesPath").value = dir;
+    toast("Hi-res images folder set");
+  }
+);
+
 // Prevent the window itself from navigating when files are dropped outside zones
 window.addEventListener("dragover", (e) => { e.preventDefault(); });
 window.addEventListener("drop", (e) => { e.preventDefault(); });
@@ -398,6 +419,7 @@ $("runBtn").onclick = async () => {
     inddPath: state.indd,
     outputDir: outputDir,
     refFiles: state.refFiles,
+    hiResImagesFolder: state.hiResImages,
     settings: settings,
   });
 

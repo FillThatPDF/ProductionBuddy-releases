@@ -195,6 +195,29 @@
         } catch (e) {}
     }
 
+    // ---- Placed-image inventory (paths + filenames) ----
+    // Used by the hi-res swap pre-pass to identify watermarked stock-photo
+    // comps and re-link them to licensed hi-res versions in the user's
+    // Box Images folder.
+    var placedImages = [];
+    try {
+        var allG = doc.allGraphics;
+        for (var gi = 0; gi < allG.length; gi++) {
+            try {
+                var lk = allG[gi].itemLink;
+                if (!lk) continue;
+                var lkPath = "", lkName = "";
+                try { lkPath = String(lk.filePath || ""); } catch (e) {}
+                try { lkName = String(lk.name || ""); } catch (e) {}
+                if (!lkPath && !lkName) continue;
+                placedImages.push(
+                    "{\"path\":" + jsonStr(lkPath) +
+                    ",\"name\":" + jsonStr(lkName) + "}"
+                );
+            } catch (e) {}
+        }
+    } catch (e) {}
+
     // ---- Document-type heuristic ----
     var docType = "unknown";
     var hasTableWithRaters = false, hasFormFields = false;
@@ -227,7 +250,8 @@
         "\"swatches\":[" + swatches.join(",") + "]," +
         "\"pages\":[" + pages.join(",") + "]," +
         "\"hyperlinks\":[" + hyperlinks.join(",") + "]," +
-        "\"stories_preview\":[" + storiesPreview.join(",") + "]" +
+        "\"stories_preview\":[" + storiesPreview.join(",") + "]," +
+        "\"placed_images\":[" + placedImages.join(",") + "]" +
     "}";
 
     var f = File(outPath);
