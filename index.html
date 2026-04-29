@@ -7,6 +7,13 @@
 </head>
 <body>
   <div class="app">
+    <!-- Auto-update banner: hidden until electron-updater finds a new version -->
+    <div id="updateBanner" class="update-banner hidden">
+      <span class="update-banner-icon">🚀</span>
+      <span class="update-banner-text">A new version is available <span id="updateBannerVersion"></span></span>
+      <a href="#" id="updateBannerAction" class="update-banner-action">Downloading…</a>
+    </div>
+
     <header>
       <div class="header-row">
         <div>

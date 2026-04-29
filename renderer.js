@@ -13,6 +13,46 @@ window.addEventListener("unhandledrejection", (e) => {
   console.error("[renderer]", e.reason);
 });
 
+// ---- Auto-update banner ----
+// IPC listeners must register at module load (sync), not inside an async
+// IIFE — electron-updater fires `update-available` ~1.5s after launch and
+// the event will be missed if the listener attaches later.
+function showUpdateBanner(version) {
+  const banner = document.getElementById("updateBanner");
+  const v = document.getElementById("updateBannerVersion");
+  const a = document.getElementById("updateBannerAction");
+  if (!banner) return;
+  banner.classList.remove("hidden");
+  if (v && version) v.textContent = "(v" + version + ")";
+  if (a) {
+    a.textContent = "Downloading…";
+    a.style.cursor = "default";
+    a.onclick = (e) => e.preventDefault();
+  }
+}
+ipcRenderer.on("update-available", (_evt, version) => showUpdateBanner(version));
+ipcRenderer.on("update-download-progress", (_evt, percent) => {
+  const banner = document.getElementById("updateBanner");
+  const a = document.getElementById("updateBannerAction");
+  if (banner) banner.classList.remove("hidden");
+  if (a) a.textContent = "Downloading… " + percent + "%";
+});
+ipcRenderer.on("update-downloaded", (_evt, version) => {
+  const banner = document.getElementById("updateBanner");
+  const v = document.getElementById("updateBannerVersion");
+  const a = document.getElementById("updateBannerAction");
+  if (banner) banner.classList.remove("hidden");
+  if (v && version) v.textContent = "(v" + version + ")";
+  if (a) {
+    a.textContent = "Restart to Update";
+    a.style.cursor = "pointer";
+    a.onclick = (e) => {
+      e.preventDefault();
+      ipcRenderer.invoke("install-update");
+    };
+  }
+});
+
 // Inlined FINDING_META — single source of truth, no cross-file dependency.
 const FINDING_META = {
   TEXT_WHITESPACE:           { title: "Whitespace cleanup", plain: "Multiple consecutive spaces or trailing spaces at line ends were removed.", fix: "Already auto-fixed.", canAutoFix: true },

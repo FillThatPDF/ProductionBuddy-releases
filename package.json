@@ -1,7 +1,7 @@
 {
   "name": "production-buddy",
   "productName": "Production Buddy",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Apply marked-up PDF edits to InDesign / Illustrator documents with automated production QA + 508 checks",
   "main": "main.js",
   "scripts": {
@@ -31,6 +31,7 @@
     "appId": "com.productionbuddy.app",
     "productName": "Production Buddy",
     "asar": true,
+    "afterPack": "scripts/adhoc-sign.js",
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "assets/icon.icns",
