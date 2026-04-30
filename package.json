@@ -1,15 +1,15 @@
 {
   "name": "production-buddy",
   "productName": "Production Buddy",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Apply marked-up PDF edits to InDesign / Illustrator documents with automated production QA + 508 checks",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "build": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg zip",
-    "build:arm64": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg zip --arm64",
-    "build:x64": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg zip --x64",
+    "build": "electron-builder --mac dmg zip",
+    "build:arm64": "electron-builder --mac dmg zip --arm64",
+    "build:x64": "electron-builder --mac dmg zip --x64",
     "release": "node release.js",
     "postinstall": "electron-builder install-app-deps"
   },
@@ -20,6 +20,7 @@
   "author": "Production Buddy",
   "license": "MIT",
   "devDependencies": {
+    "@electron/notarize": "^3.1.1",
     "electron": "^32.0.0",
     "electron-builder": "^24.13.3"
   },
@@ -31,7 +32,7 @@
     "appId": "com.productionbuddy.app",
     "productName": "Production Buddy",
     "asar": true,
-    "afterPack": "scripts/adhoc-sign.js",
+    "afterSign": "scripts/notarize.js",
     "mac": {
       "category": "public.app-category.productivity",
       "icon": "assets/icon.icns",
@@ -40,8 +41,11 @@
         "zip"
       ],
       "artifactName": "ProductionBuddy-${version}-${arch}.${ext}",
-      "identity": null,
-      "gatekeeperAssess": false
+      "identity": "E3C6B97B885843868879D7360252DE1E1EAF732E",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "dmg": {
       "title": "Production Buddy ${version}",
