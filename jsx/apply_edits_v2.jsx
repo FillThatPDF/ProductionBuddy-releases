@@ -138,6 +138,16 @@
             paraStyle: (function(){ try { return cell.paragraphs[0].appliedParagraphStyle; } catch (e) { return null; } })(),
             fillColor: (function(){ try { return cell.fillColor; } catch (e) { return null; } })(),
             fillTint:  (function(){ try { return cell.fillTint; } catch (e) { return null; } })(),
+            // Cell metrics — needed because cellStyle is often [None], in which
+            // case these are stored directly on the cell. Without restoring
+            // them, AT_BEGINNING-inserted cells inherit InDesign defaults
+            // (top-aligned, default insets) and look misaligned vs. the
+            // surrounding rows that have these set explicitly.
+            verticalJustification: (function(){ try { return cell.verticalJustification; } catch (e) { return null; } })(),
+            topInset:    (function(){ try { return cell.topInset;    } catch (e) { return null; } })(),
+            bottomInset: (function(){ try { return cell.bottomInset; } catch (e) { return null; } })(),
+            leftInset:   (function(){ try { return cell.leftInset;   } catch (e) { return null; } })(),
+            rightInset:  (function(){ try { return cell.rightInset;  } catch (e) { return null; } })(),
             chars:     charsData,
             // Edge strokes
             topStroke:    snapshotEdgeStroke(cell, "top"),
@@ -156,7 +166,24 @@
     function applyCellFormat(cell, snap, newText) {
         try { if (snap.cellStyle) cell.appliedCellStyle = snap.cellStyle; } catch (e) {}
         try { if (snap.paraStyle) cell.paragraphs[0].appliedParagraphStyle = snap.paraStyle; } catch (e) {}
-        if (newText !== undefined) cell.contents = String(newText || "");
+        // Restore cell metrics first — content/font writes after this don't
+        // change the geometry, so it's fine to set them up-front.
+        try { if (snap.verticalJustification != null) cell.verticalJustification = snap.verticalJustification; } catch (e) {}
+        try { if (snap.topInset    != null) cell.topInset    = snap.topInset;    } catch (e) {}
+        try { if (snap.bottomInset != null) cell.bottomInset = snap.bottomInset; } catch (e) {}
+        try { if (snap.leftInset   != null) cell.leftInset   = snap.leftInset;   } catch (e) {}
+        try { if (snap.rightInset  != null) cell.rightInset  = snap.rightInset;  } catch (e) {}
+        if (newText !== undefined) {
+            var s = String(newText || "");
+            // Render U+2713 via the Wingdings glyph since most body fonts
+            // don't have a glyph for it — same convention as SET_CELL_VALUE.
+            if (s === "\u2713" || s === "CHECK" || s === "CHECKMARK") {
+                cell.contents = String.fromCharCode(61692);
+                try { cell.characters[0].appliedFont = app.fonts.itemByName("Wingdings\tRegular"); } catch (e) {}
+            } else {
+                cell.contents = s;
+            }
+        }
         try { if (snap.fillColor) cell.fillColor = snap.fillColor; } catch (e) {}
         try { if (snap.fillTint != null) cell.fillTint = snap.fillTint; } catch (e) {}
         // Apply first-character formatting to entire run
@@ -187,6 +214,100 @@
     }
 
     // ==========================================================
+    // SAFE ROW INSERTION
+    //
+    // InDesign 2025/2026 has a DOM bug: when you call
+    // `tbl.rows.add(LocationOptions.AT_END)` repeatedly, only the FIRST new
+    // row's cells accept content writes. Subsequent rows' cells silently
+    // ignore `cell.contents = "X"` AND any later writes to those cells (e.g.
+    // from SORT_TABLE rewriting positions) also fail. The result is data loss
+    // for the 2nd+ added row PLUS data loss for whichever original row
+    // alphabetically sorts into those broken cells' positions.
+    //
+    // Workaround: use AT_BEGINNING (which doesn't have the bug — every
+    // inserted row gets a working cell), snapshot the entire table state
+    // first, then re-stamp every cell top-to-bottom from the snapshot. The
+    // newly-inserted AT_BEGINNING row provides one extra "fresh" row that
+    // we can write into; everything else is an existing cell that we know
+    // accepts writes.
+    // ==========================================================
+    function addRowSafely(tbl, insertAt, values) {
+        var nCols = tbl.columns.length;
+        var headerRows = tbl.headerRowCount;
+        if (insertAt < 0 || insertAt > tbl.rows.length) insertAt = tbl.rows.length;
+
+        // Snapshot every cell (contents + format) AND each row's height
+        // properties. We need the row metrics because the AT_BEGINNING insert
+        // creates a row with default height; without re-stamping, the new row
+        // ends up taller/shorter than its peers.
+        var snap = [];
+        var rowMetrics = [];
+        for (var r = 0; r < tbl.rows.length; r++) {
+            var rowSnap = [];
+            for (var c = 0; c < nCols; c++) {
+                var cell = tbl.rows[r].cells[c];
+                rowSnap.push({
+                    contents: String(cell.contents || ""),
+                    format:   snapshotCellFormat(cell)
+                });
+            }
+            snap.push(rowSnap);
+            rowMetrics.push({
+                height:        (function(rr){ try { return tbl.rows[rr].height;        } catch (e) { return null; } })(r),
+                minimumHeight: (function(rr){ try { return tbl.rows[rr].minimumHeight; } catch (e) { return null; } })(r),
+                maximumHeight: (function(rr){ try { return tbl.rows[rr].maximumHeight; } catch (e) { return null; } })(r)
+            });
+        }
+
+        // Build a sample format snapshot from the row immediately before the
+        // insertion point (or the last body row if we're appending).
+        var sampleIdx = Math.max(headerRows, Math.min(snap.length - 1, insertAt - 1));
+        if (sampleIdx >= snap.length) sampleIdx = snap.length - 1;
+        if (sampleIdx < 0) sampleIdx = 0;
+        var newRowSnap = [];
+        for (var c2 = 0; c2 < nCols; c2++) {
+            newRowSnap.push({
+                contents: c2 < values.length ? String(values[c2]) : "",
+                format:   snap[sampleIdx][c2].format
+            });
+        }
+        var newRowMetrics = rowMetrics[sampleIdx];
+
+        // Build the desired final-row content list AND a parallel metrics list,
+        // both with the new row spliced in at the requested position.
+        var finalRows = [];
+        var finalMetrics = [];
+        for (var r2 = 0; r2 <= snap.length; r2++) {
+            if (r2 === insertAt) {
+                finalRows.push(newRowSnap);
+                finalMetrics.push(newRowMetrics);
+            }
+            if (r2 < snap.length) {
+                finalRows.push(snap[r2]);
+                finalMetrics.push(rowMetrics[r2]);
+            }
+        }
+
+        // Add one row at AT_BEGINNING (only location that doesn't trigger the
+        // cell-write bug for subsequent inserts).
+        tbl.rows.add(LocationOptions.AT_BEGINNING);
+
+        // Re-stamp every cell from finalRows. Both existing cells and the
+        // AT_BEGINNING-inserted cells accept content writes here.
+        for (var r3 = 0; r3 < finalRows.length; r3++) {
+            for (var c3 = 0; c3 < nCols; c3++) {
+                applyCellFormat(tbl.rows[r3].cells[c3], finalRows[r3][c3].format, finalRows[r3][c3].contents);
+            }
+            // Restore row-level geometry so the new row matches its peers
+            try {
+                if (finalMetrics[r3].height        != null) tbl.rows[r3].height        = finalMetrics[r3].height;
+                if (finalMetrics[r3].minimumHeight != null) tbl.rows[r3].minimumHeight = finalMetrics[r3].minimumHeight;
+                if (finalMetrics[r3].maximumHeight != null) tbl.rows[r3].maximumHeight = finalMetrics[r3].maximumHeight;
+            } catch (e) {}
+        }
+    }
+
+    // ==========================================================
     // EDIT DISPATCHER
     // ==========================================================
     var modifiedTables = {}; // table id → true; for post-edit canonicalization
@@ -212,31 +333,14 @@
             if (!tbl) { FLAG(op + ": could not resolve target table"); return; }
             var values = (edit.params && edit.params.values) || [];
             // Sanity check \u2014 reject row inserts whose value count doesn't match
-            // the table's column count (LLMs sometimes hallucinate single-value
-            // rows for atomic-word annotations like "Program" or "Subtype").
-            // Allow up to \u00B11 column tolerance for trailing optional fields.
+            // the table's column count.
             if (values.length < tbl.columns.length - 1) {
                 FLAG(op + ": refused \u2014 only " + values.length + " value(s) for " + tbl.columns.length + "-column table. Annotation: \"" + (edit.source_annotation || "").substring(0, 80) + "\"");
                 return;
             }
             markTableModified(tbl);
-            var headerRows = tbl.headerRowCount;
             var insertAt = (op === "INSERT_ROW_AT" && edit.params && edit.params.index != null) ? edit.params.index : tbl.rows.length;
-            // Pick a body row to use as formatting template
-            var sampleIdx = Math.max(headerRows, Math.min(tbl.rows.length - 1, insertAt - 1));
-            var sampleSnaps = [];
-            for (var c = 0; c < tbl.columns.length; c++) sampleSnaps.push(snapshotCellFormat(tbl.rows[sampleIdx].cells[c]));
-            // Add row at end then move (InDesign tables don't support arbitrary insertion well; we add and move via swapping).
-            var newRow;
-            if (op === "INSERT_ROW_AT" && insertAt < tbl.rows.length) {
-                newRow = tbl.rows[insertAt - 1].insertRows(LocationOptions.AFTER, 1, 0)[0];
-            } else {
-                newRow = tbl.rows.add(LocationOptions.AT_END);
-            }
-            for (var c = 0; c < tbl.columns.length; c++) {
-                var text = c < values.length ? values[c] : "";
-                applyCellFormat(newRow.cells[c], sampleSnaps[c], text);
-            }
+            addRowSafely(tbl, insertAt, values);
             L("  added row with " + values.length + " value(s) at index " + (op === "INSERT_ROW_AT" ? insertAt : "end"));
             return;
         }

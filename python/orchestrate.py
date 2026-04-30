@@ -574,8 +574,298 @@ def run_indesign_script(jsx_path, timeout=1200, engine=None):
     return engine.run_script(jsx_path, timeout=timeout)
 
 
+DATA_MERGE_TEMPLATE = Path(__file__).parent.parent / "jsx" / "data_merge.jsx"
+TAG_TEMPLATE_JSX    = Path(__file__).parent.parent / "jsx" / "tag_template.jsx"
+
+
+def _count_csv_rows(csv_path):
+    import csv
+    with open(csv_path, "r", encoding="utf-8", newline="") as f:
+        return sum(1 for _ in csv.reader(f)) - 1  # minus header
+
+def _count_csv_cols(csv_path):
+    import csv
+    with open(csv_path, "r", encoding="utf-8", newline="") as f:
+        r = csv.reader(f)
+        try: return len(next(r))
+        except StopIteration: return 0
+
+def _read_csv_states(csv_path):
+    import csv
+    out = []
+    with open(csv_path, "r", encoding="utf-8", newline="") as f:
+        for row in csv.DictReader(f):
+            s = (row.get("state") or "").strip()
+            if s: out.append(s)
+    return out
+
+
+def _resolve_unique_output(input_path, requested_output, suffix="_TAGGED"):
+    """Return an output path that's guaranteed not to overwrite anything.
+
+    Rules:
+      - If `requested_output` is empty / None / equals `input_path`, build a
+        sibling path with `suffix` inserted before the extension.
+      - If the chosen path already exists on disk, append " 2", " 3", … until
+        a free filename is found. Never overwrites.
+    """
+    inp = Path(input_path)
+    if requested_output and Path(requested_output).resolve() != inp.resolve():
+        target = Path(requested_output)
+    else:
+        target = inp.with_name(f"{inp.stem}{suffix}{inp.suffix}")
+    # Collision guard
+    if not target.exists():
+        return str(target)
+    n = 2
+    while True:
+        candidate = target.with_name(f"{target.stem} {n}{target.suffix}")
+        if not candidate.exists():
+            return str(candidate)
+        n += 1
+
+
+def main_tag_template(payload):
+    """Auto-tag an InDesign template with <<placeholder>> tokens.
+
+    Payload shape:
+      {
+        "mode": "tag_template",
+        "templatePath": "/path/to/untagged.indd",
+        "xlsxPaths": [...]           — OR — "csvPath": "/path/to/data.csv",
+        "refState": "California",   (optional; default 'California')
+        "outputPath": "/path/...",  (optional; default = save in place)
+      }
+    """
+    sys.path.insert(0, str(HERE))
+    from data_merge import flatten_xlsx_to_csv
+    from tag_template_driver import build_tag_pairs, load_ref_row, LIST_COLS
+
+    template_path = payload["templatePath"]
+    xlsx_paths    = payload.get("xlsxPaths") or []
+    csv_path      = payload.get("csvPath")
+    ref_state     = (payload.get("refState") or "California").strip()
+    output_path   = payload.get("outputPath")
+    settings      = payload.get("settings") or {}
+
+    # Never overwrite the input. If no output path was supplied (or it points
+    # at the input), generate "<stem>_TAGGED.indd" next to the input, falling
+    # back to "_TAGGED 2.indd" / "_TAGGED 3.indd" if that already exists.
+    output_path = _resolve_unique_output(template_path, output_path, "_TAGGED")
+
+    log(f"[orchestrate] MODE: tag_template")
+    log(f"[orchestrate] template:  {template_path}")
+    log(f"[orchestrate] ref state: {ref_state}")
+    log(f"[orchestrate] output:    {output_path}")
+
+    work_dir = get_work_dir(Path(output_path).parent, template_path,
+                             settings.get("cacheRetention", DEFAULT_CACHE_RETENTION))
+    log(f"[orchestrate] WORK: {work_dir}")
+    print(f"[work_dir] {work_dir}", flush=True)
+
+    # Step 1: get a CSV — either flatten the Excel files or use the one provided
+    if not csv_path:
+        if not xlsx_paths:
+            log("[orchestrate] ERROR: need either xlsxPaths or csvPath")
+            sys.exit(2)
+        log("[orchestrate] step 1: flattening xlsx → csv")
+        csv_path = work_dir / "data_merge.csv"
+        flatten_xlsx_to_csv(xlsx_paths, csv_path,
+                             out_placeholders_md=work_dir / "placeholders.md")
+        log(f"[orchestrate]   csv → {csv_path}")
+    else:
+        log(f"[orchestrate] step 1: using existing csv → {csv_path}")
+
+    # Step 2: pull the reference state's row
+    ref_row = load_ref_row(csv_path, ref_state)
+    if not ref_row:
+        log(f"[orchestrate] ERROR: reference state '{ref_state}' not found in CSV")
+        sys.exit(3)
+    log(f"[orchestrate] step 2: ref row has {len(ref_row)} columns")
+
+    # Step 3: build tag pairs + write JSON sidecars
+    pairs = build_tag_pairs(ref_row, ref_state)
+    list_tokens = sorted(LIST_COLS)
+    pairs_json    = work_dir / "tag_pairs.json"
+    list_tokens_j = work_dir / "tag_list_tokens.json"
+    pairs_json.write_text(json.dumps(pairs, indent=2))
+    list_tokens_j.write_text(json.dumps(list_tokens))
+    log(f"[orchestrate] step 3: built {len(pairs)} tag pair(s) + "
+        f"{len(list_tokens)} list-token(s)")
+
+    # Step 4: render + run the tagging JSX
+    log_path   = work_dir / "tag_log.txt"
+    report_md  = work_dir / "tag_report.md"
+    log_path.write_text("")
+    jsx_out    = work_dir / "tag_template.jsx"
+    render_template(TAG_TEMPLATE_JSX, {
+        "__TEMPLATE_INDD__":         str(template_path),
+        "__OUTPUT_INDD__":           str(output_path),
+        "__PAIRS_JSON_PATH__":       str(pairs_json),
+        "__LIST_TOKENS_JSON_PATH__": str(list_tokens_j),
+        "__REPORT_PATH__":           str(report_md),
+        "__LOG_PATH__":              str(log_path),
+    }, jsx_out)
+
+    log("[orchestrate] step 4: running InDesign auto-tagger…")
+    from engines.indesign import InDesignEngine
+    engine = InDesignEngine()
+    proc = run_indesign_script(jsx_out, timeout=600, engine=engine)
+    if proc.returncode != 0:
+        log(f"[orchestrate] tag step failed: {proc.stderr}")
+        sys.exit(proc.returncode)
+
+    # Tail the JSX log
+    try:
+        for line in log_path.read_text().split("\n"):
+            if line.strip():
+                log(f"[indesign] {line}")
+    except Exception:
+        pass
+
+    # Surface the report inline as well
+    try:
+        report_text = report_md.read_text()
+        log("[orchestrate] --- tag report ---")
+        for line in report_text.split("\n"):
+            log(f"[orchestrate] {line}")
+    except Exception:
+        pass
+
+    (work_dir / "result.json").write_text(json.dumps({
+        "mode": "tag_template",
+        "template_input": str(template_path),
+        "template_output": str(output_path),
+        "csv_path": str(csv_path),
+        "report": str(report_md),
+        "n_pairs": len(pairs),
+    }))
+    log(f"[orchestrate] done — tagged template → {output_path}")
+
+
+def main_data_merge(payload):
+    """Run the Excel → tagged-template → per-state .indd pipeline.
+
+    Payload shape:
+      {
+        "mode": "data_merge",
+        "templatePath": "/path/to/template.indd",
+        "xlsxPaths": ["/path/to/batch1.xlsx", "/path/to/batch2.xlsx", …],
+        "outputDir": "/path/to/where/the/per_state_files/should/land",
+        "nameColumn": "state"   (optional; default 'state')
+      }
+    """
+    sys.path.insert(0, str(HERE))
+    from data_merge import flatten_xlsx_to_csv
+
+    template_path = payload["templatePath"]
+    xlsx_paths    = payload.get("xlsxPaths") or []
+    csv_input     = payload.get("csvPath")  # optional pre-built CSV
+    output_dir    = payload["outputDir"]
+    name_column   = (payload.get("nameColumn") or "state").strip()
+    maps_folder   = payload.get("mapsFolder") or None
+    settings      = payload.get("settings") or {}
+
+    log(f"[orchestrate] MODE: data_merge")
+    log(f"[orchestrate] template: {template_path}")
+    if csv_input:
+        log(f"[orchestrate] csv input: {csv_input}")
+    else:
+        log(f"[orchestrate] xlsx ({len(xlsx_paths)}):")
+        for p in xlsx_paths: log(f"[orchestrate]   - {p}")
+    log(f"[orchestrate] maps folder: {maps_folder or '(none)'}")
+    log(f"[orchestrate] output: {output_dir}")
+
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    work_dir = get_work_dir(output_dir, template_path,
+                             settings.get("cacheRetention", DEFAULT_CACHE_RETENTION))
+    log(f"[orchestrate] WORK: {work_dir}")
+    print(f"[work_dir] {work_dir}", flush=True)
+
+    # Step 1: get a CSV — either flatten Excel files or use the provided one
+    md_path  = work_dir / "placeholders.md"
+    if csv_input:
+        log("[orchestrate] step 1: using existing CSV (skipping xlsx flatten)")
+        csv_path = Path(csv_input)
+        summary = {
+            "n_states": _count_csv_rows(csv_path),
+            "n_columns": _count_csv_cols(csv_path),
+            "states": _read_csv_states(csv_path),
+            "n_maps_matched": 0, "maps_missing": [],
+        }
+    else:
+        log("[orchestrate] step 1: flattening xlsx → csv…")
+        csv_path = work_dir / "data_merge.csv"
+        summary = flatten_xlsx_to_csv(xlsx_paths, csv_path, md_path,
+                                       maps_folder=maps_folder)
+    log(f"[orchestrate]   {summary['n_states']} states, "
+        f"{summary['n_columns']} columns → {csv_path}")
+    if maps_folder and summary.get("n_maps_matched") is not None:
+        log(f"[orchestrate]   maps matched: {summary['n_maps_matched']}/{summary['n_states']}")
+        if summary["maps_missing"]:
+            log(f"[orchestrate]   no map for: {', '.join(summary['maps_missing'][:6])}"
+                + ("…" if len(summary['maps_missing']) > 6 else ""))
+    if not csv_input:
+        log(f"[orchestrate]   placeholder reference → {md_path}")
+
+    # Step 2: Run the InDesign data-merge JSX. One pass through, produces
+    # one .indd per record under output_dir.
+    log("[orchestrate] step 2: running InDesign Data Merge…")
+    log_path = work_dir / "merge_log.txt"
+    log_path.write_text("")  # JSX appends with "a"
+    merge_jsx = work_dir / "data_merge.jsx"
+    render_template(DATA_MERGE_TEMPLATE, {
+        "__TEMPLATE_INDD__": str(template_path),
+        "__CSV_PATH__":      str(csv_path),
+        "__OUTPUT_DIR__":    str(output_dir),
+        "__LOG_PATH__":      str(log_path),
+        "__NAME_COLUMN__":   name_column,
+    }, merge_jsx)
+
+    # Use InDesign engine for now (only engine that supports Data Merge)
+    from engines.indesign import InDesignEngine
+    engine = InDesignEngine()
+    proc = run_indesign_script(merge_jsx, timeout=1800, engine=engine)
+    if proc.returncode != 0:
+        log(f"[orchestrate] Data Merge failed: {proc.stderr}")
+        sys.exit(proc.returncode)
+
+    # Tail the merge log for the user
+    try:
+        merge_output = log_path.read_text()
+        for line in merge_output.split("\n"):
+            if line.strip():
+                log(f"[indesign] {line}")
+    except Exception:
+        pass
+
+    # Write result.json so the renderer knows what got generated
+    generated = sorted(Path(output_dir).glob("*.indd"))
+    (work_dir / "result.json").write_text(json.dumps({
+        "mode": "data_merge",
+        "states": summary["states"],
+        "n_states": summary["n_states"],
+        "n_columns": summary["n_columns"],
+        "csv_path": str(csv_path),
+        "placeholders_md": str(md_path),
+        "generated_files": [str(g) for g in generated],
+        "output_dir": str(output_dir),
+    }))
+    log(f"[orchestrate] done — generated {len(generated)} .indd file(s)")
+
+
 def main():
     payload = json.loads(sys.argv[1])
+    mode = payload.get("mode") or "markup"
+
+    # Mode dispatch — the original "markup" mode handles PDF-annotation →
+    # InDesign edits. The "data_merge" mode is a separate pipeline: takes a
+    # tagged template + Excel files, produces one .indd per data record.
+    if mode == "data_merge":
+        return main_data_merge(payload)
+    if mode == "tag_template":
+        return main_tag_template(payload)
+
     pdf_path = payload["pdfPath"]
     indd_path = payload["inddPath"]
     output_dir = payload["outputDir"]

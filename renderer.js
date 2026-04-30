@@ -107,6 +107,19 @@ window.FINDING_META = FINDING_META; // for debugging via devtools
 
 const state = { pdf: null, indd: null, out: null, refFiles: [], hiResImages: null };
 
+// Separate state for the Data Merge mode
+const dmState = {
+  template: null,
+  xlsx: [],
+  out: null,
+  nameCol: "state",
+  source: "xlsx",   // "xlsx" | "csv"
+  csvPath: null,
+};
+// Separate state for the Tag-a-Template mode
+const ttState = { template: null, xlsx: [], refState: "California", outPath: null };
+let appMode = "markup"; // "markup" | "data_merge" | "tag_template"
+
 // ---- Settings: persistence + defaults ----
 const DEFAULT_SETTINGS = {
   useOllama: true,
@@ -202,6 +215,197 @@ function renderRefFiles() {
 $("addRefFile").onclick = async () => {
   const p = await ipcRenderer.invoke("pick-file", REF_EXTS);
   if (p && !state.refFiles.includes(p)) { state.refFiles.push(p); renderRefFiles(); }
+};
+
+// ====================== Data Merge mode ======================
+function setMode(mode) {
+  appMode = mode;
+  document.querySelectorAll(".mode-tab").forEach((b) => {
+    b.classList.toggle("active", b.dataset.mode === mode);
+  });
+  $("modeMarkup").classList.toggle("hidden", mode !== "markup");
+  $("modeDataMerge").classList.toggle("hidden", mode !== "data_merge");
+  $("modeTagTemplate").classList.toggle("hidden", mode !== "tag_template");
+}
+document.querySelectorAll(".mode-tab").forEach((b) => {
+  b.onclick = () => setMode(b.dataset.mode);
+});
+
+function renderDmXlsxList() {
+  const list = $("dmXlsxList");
+  list.innerHTML = "";
+  for (let i = 0; i < dmState.xlsx.length; i++) {
+    const filePath = dmState.xlsx[i];
+    const row = document.createElement("div");
+    row.className = "ref-file-row";
+    const nm = path.basename(filePath);
+    row.innerHTML = `
+      <span class="ref-file-name" title="${escapeHtml(filePath)}">${escapeHtml(nm)}</span>
+      <button class="ref-file-remove" data-idx="${i}" title="Remove">×</button>
+    `;
+    list.appendChild(row);
+  }
+  list.querySelectorAll(".ref-file-remove").forEach((btn) => {
+    btn.onclick = () => { dmState.xlsx.splice(parseInt(btn.dataset.idx, 10), 1); renderDmXlsxList(); updateDmRunButton(); };
+  });
+  updateDmRunButton();
+}
+function updateDmRunButton() {
+  const haveData = dmState.source === "csv"
+    ? !!dmState.csvPath
+    : dmState.xlsx.length > 0;
+  $("dmRunBtn").disabled = !(dmState.template && haveData && dmState.out);
+}
+
+$("dmPickTemplate").onclick = async () => {
+  const p = await ipcRenderer.invoke("pick-file", [{ name: "InDesign template", extensions: ["indd"] }]);
+  if (p) { dmState.template = p; $("dmTemplatePath").value = p; updateDmRunButton(); }
+};
+$("dmAddXlsx").onclick = async () => {
+  const p = await ipcRenderer.invoke("pick-file", [{ name: "Excel", extensions: ["xlsx", "xls"] }]);
+  if (p && !dmState.xlsx.includes(p)) { dmState.xlsx.push(p); renderDmXlsxList(); }
+};
+$("dmPickMaps").onclick = async () => {
+  const p = await ipcRenderer.invoke("pick-folder");
+  if (p) { dmState.mapsFolder = p; $("dmMapsFolder").value = p; }
+};
+$("dmPickOut").onclick = async () => {
+  const p = await ipcRenderer.invoke("pick-folder");
+  if (p) { dmState.out = p; $("dmOutDir").value = p; updateDmRunButton(); }
+};
+$("dmNameCol").addEventListener("input", (e) => { dmState.nameCol = e.target.value.trim() || "state"; });
+
+// Data-source toggle: Excel files vs existing CSV
+document.querySelectorAll('input[name="dmSource"]').forEach((r) => {
+  r.onchange = () => {
+    dmState.source = r.checked ? r.value : dmState.source;
+    if (r.checked) {
+      $("dmXlsxBlock").classList.toggle("hidden", r.value !== "xlsx");
+      $("dmCsvBlock").classList.toggle("hidden", r.value !== "csv");
+      updateDmRunButton();
+    }
+  };
+});
+$("dmPickCsv").onclick = async () => {
+  const p = await ipcRenderer.invoke("pick-file", [{ name: "CSV", extensions: ["csv"] }]);
+  if (p) { dmState.csvPath = p; $("dmCsvPath").value = p; updateDmRunButton(); }
+};
+
+$("dmRunBtn").onclick = async () => {
+  $("dmRunBtn").disabled = true;
+  $("progress").classList.remove("hidden");
+  $("progressLog").textContent = "";
+  $("progressBarFill").style.width = "5%";
+  $("progressStep").textContent = "Starting Data Merge…";
+  $("findings").classList.add("hidden");
+  $("result").classList.add("hidden");
+
+  const result = await ipcRenderer.invoke("run-orchestrator", {
+    mode: "data_merge",
+    templatePath: dmState.template,
+    xlsxPaths: dmState.source === "xlsx" ? dmState.xlsx : [],
+    csvPath:    dmState.source === "csv" ? dmState.csvPath : null,
+    mapsFolder: dmState.mapsFolder || null,
+    outputDir: dmState.out,
+    nameColumn: dmState.nameCol || "state",
+    settings: settings,
+  });
+  $("progressBarFill").style.width = "100%";
+  $("progressStep").textContent = result.exitCode === 0 ? "Complete." : "Failed.";
+  if (result.exitCode !== 0) {
+    $("progressLog").textContent += "\n[ERROR] orchestrator exited with code " + result.exitCode + "\n" + (result.stderr || "");
+    $("dmRunBtn").disabled = false;
+    return;
+  }
+  // Show a summary panel
+  const r = result.result || {};
+  const generated = (r.generated_files || []).length;
+  $("outIndd").textContent = `${generated} .indd file(s) in ${r.output_dir || dmState.out}`;
+  $("outIndd").href = "file://" + (r.output_dir || dmState.out);
+  $("outIndd").onclick = (e) => { e.preventDefault(); ipcRenderer.invoke("open-file", r.output_dir || dmState.out); };
+  // Hide the PDF row in this mode
+  const outPdfP = $("outPdf").parentElement;
+  if (outPdfP) outPdfP.style.display = "none";
+  $("result").classList.remove("hidden");
+  $("dmRunBtn").disabled = false;
+};
+
+// ====================== Tag a Template mode ======================
+function renderTtXlsxList() {
+  const list = $("ttXlsxList");
+  list.innerHTML = "";
+  for (let i = 0; i < ttState.xlsx.length; i++) {
+    const filePath = ttState.xlsx[i];
+    const row = document.createElement("div");
+    row.className = "ref-file-row";
+    const nm = path.basename(filePath);
+    row.innerHTML = `
+      <span class="ref-file-name" title="${escapeHtml(filePath)}">${escapeHtml(nm)}</span>
+      <button class="ref-file-remove" data-idx="${i}" title="Remove">×</button>
+    `;
+    list.appendChild(row);
+  }
+  list.querySelectorAll(".ref-file-remove").forEach((btn) => {
+    btn.onclick = () => { ttState.xlsx.splice(parseInt(btn.dataset.idx, 10), 1); renderTtXlsxList(); updateTtRunButton(); };
+  });
+  updateTtRunButton();
+}
+function updateTtRunButton() {
+  $("ttRunBtn").disabled = !(ttState.template && ttState.xlsx.length > 0);
+}
+$("ttPickTemplate").onclick = async () => {
+  const p = await ipcRenderer.invoke("pick-file", [{ name: "InDesign template", extensions: ["indd"] }]);
+  if (p) { ttState.template = p; $("ttTemplatePath").value = p; updateTtRunButton(); }
+};
+$("ttAddXlsx").onclick = async () => {
+  const p = await ipcRenderer.invoke("pick-file", [{ name: "Excel", extensions: ["xlsx", "xls"] }]);
+  if (p && !ttState.xlsx.includes(p)) { ttState.xlsx.push(p); renderTtXlsxList(); }
+};
+$("ttPickOut").onclick = async () => {
+  // Pick a folder; the tagged copy goes there with "_TAGGED" appended to the name.
+  const folder = await ipcRenderer.invoke("pick-folder");
+  if (!folder) return;
+  const base = path.basename(ttState.template || "template.indd");
+  const stem = base.replace(/\.indd$/i, "");
+  ttState.outPath = path.join(folder, `${stem}_TAGGED.indd`);
+  $("ttOutPath").value = ttState.outPath;
+};
+$("ttRefState").addEventListener("input", (e) => {
+  ttState.refState = e.target.value.trim() || "California";
+});
+
+$("ttRunBtn").onclick = async () => {
+  $("ttRunBtn").disabled = true;
+  $("progress").classList.remove("hidden");
+  $("progressLog").textContent = "";
+  $("progressBarFill").style.width = "5%";
+  $("progressStep").textContent = "Auto-tagging template…";
+  $("findings").classList.add("hidden");
+  $("result").classList.add("hidden");
+
+  const result = await ipcRenderer.invoke("run-orchestrator", {
+    mode: "tag_template",
+    templatePath: ttState.template,
+    xlsxPaths: ttState.xlsx,
+    refState: ttState.refState || "California",
+    outputPath: ttState.outPath || null,
+    settings: settings,
+  });
+  $("progressBarFill").style.width = "100%";
+  $("progressStep").textContent = result.exitCode === 0 ? "Tagging complete." : "Tagging failed.";
+  if (result.exitCode !== 0) {
+    $("progressLog").textContent += "\n[ERROR] orchestrator exited with code " + result.exitCode + "\n" + (result.stderr || "");
+    $("ttRunBtn").disabled = false;
+    return;
+  }
+  const r = result.result || {};
+  $("outIndd").textContent = r.template_output || ttState.outPath || ttState.template;
+  $("outIndd").href = "file://" + (r.template_output || ttState.outPath || ttState.template);
+  $("outIndd").onclick = (e) => { e.preventDefault(); ipcRenderer.invoke("open-file", r.template_output || ttState.outPath || ttState.template); };
+  const outPdfP = $("outPdf").parentElement;
+  if (outPdfP) outPdfP.style.display = "none";
+  $("result").classList.remove("hidden");
+  $("ttRunBtn").disabled = false;
 };
 
 // 508 compliance check — bind checkbox to settings, save on change
@@ -403,6 +607,96 @@ setupDropZone(
     state.hiResImages = dir;
     $("hiResImagesPath").value = dir;
     toast("Hi-res images folder set");
+  }
+);
+
+const isXlsx = (p) => /\.(xlsx|xls)$/i.test(p);
+const isCsv  = (p) => /\.csv$/i.test(p);
+
+// ---- Batch Data Merge tab drop zones ----
+setupDropZone(
+  $("dmTemplatePath").closest(".step"),
+  (p) => isIndd(p),
+  (paths) => { dmState.template = paths[0]; $("dmTemplatePath").value = paths[0]; updateDmRunButton(); toast("Template loaded"); }
+);
+setupDropZone(
+  $("dmXlsxList").closest(".step"),
+  (p) => isXlsx(p) || isCsv(p),
+  (paths) => {
+    // CSV drop → switch source to CSV; xlsx drop → switch to xlsx & append
+    const csvFiles  = paths.filter(isCsv);
+    const xlsxFiles = paths.filter(isXlsx);
+    if (csvFiles.length) {
+      dmState.source = "csv";
+      dmState.csvPath = csvFiles[0];
+      $("dmCsvPath").value = csvFiles[0];
+      document.querySelector('input[name="dmSource"][value="csv"]').checked = true;
+      $("dmXlsxBlock").classList.add("hidden");
+      $("dmCsvBlock").classList.remove("hidden");
+      toast("CSV loaded");
+    } else if (xlsxFiles.length) {
+      dmState.source = "xlsx";
+      document.querySelector('input[name="dmSource"][value="xlsx"]').checked = true;
+      $("dmXlsxBlock").classList.remove("hidden");
+      $("dmCsvBlock").classList.add("hidden");
+      let added = 0;
+      for (const p of xlsxFiles) {
+        if (!dmState.xlsx.includes(p)) { dmState.xlsx.push(p); added++; }
+      }
+      renderDmXlsxList();
+      if (added) toast(`Added ${added} Excel file${added === 1 ? "" : "s"}`);
+    }
+    updateDmRunButton();
+  }
+);
+setupDropZone(
+  $("dmMapsFolder").closest(".step"),
+  (p) => true,
+  (paths) => {
+    let dir = paths[0];
+    if (!isFolder(dir)) { try { dir = path.dirname(dir); } catch { return; } }
+    dmState.mapsFolder = dir; $("dmMapsFolder").value = dir; toast("Maps folder set");
+  }
+);
+setupDropZone(
+  $("dmOutDir").closest(".step"),
+  (p) => true,
+  (paths) => {
+    let dir = paths[0];
+    if (!isFolder(dir)) { try { dir = path.dirname(dir); } catch { return; } }
+    dmState.out = dir; $("dmOutDir").value = dir; updateDmRunButton(); toast("Output folder set");
+  }
+);
+
+// ---- Tag a Template tab drop zones ----
+setupDropZone(
+  $("ttTemplatePath").closest(".step"),
+  (p) => isIndd(p),
+  (paths) => { ttState.template = paths[0]; $("ttTemplatePath").value = paths[0]; updateTtRunButton(); toast("Template loaded"); }
+);
+setupDropZone(
+  $("ttXlsxList").closest(".step"),
+  (p) => isXlsx(p),
+  (paths) => {
+    let added = 0;
+    for (const p of paths) {
+      if (!ttState.xlsx.includes(p)) { ttState.xlsx.push(p); added++; }
+    }
+    renderTtXlsxList();
+    if (added) toast(`Added ${added} Excel file${added === 1 ? "" : "s"}`);
+  }
+);
+setupDropZone(
+  $("ttOutPath").closest(".step"),
+  (p) => true,
+  (paths) => {
+    let dir = paths[0];
+    if (!isFolder(dir)) { try { dir = path.dirname(dir); } catch { return; } }
+    const base = path.basename(ttState.template || "template.indd");
+    const stem = base.replace(/\.indd$/i, "");
+    ttState.outPath = path.join(dir, `${stem}_TAGGED.indd`);
+    $("ttOutPath").value = ttState.outPath;
+    toast("Output folder set");
   }
 );
 

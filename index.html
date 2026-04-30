@@ -21,7 +21,15 @@
         </div>
         <button id="settingsBtn" class="settings-btn" title="Settings">⚙</button>
       </div>
+      <div class="mode-tabs">
+        <button class="mode-tab active" data-mode="markup">Marked-up PDF → InDesign Edits</button>
+        <button class="mode-tab" data-mode="data_merge">Batch Data Merge</button>
+        <button class="mode-tab" data-mode="tag_template">Tag a Template</button>
+      </div>
     </header>
+
+    <!-- ============== Mode: marked-up PDF → InDesign edits (default) ============== -->
+    <div id="modeMarkup">
 
     <div class="step">
       <label>① Marked-up PDF</label>
@@ -77,6 +85,120 @@
     <div class="actions">
       <button id="runBtn" class="primary" disabled>Extract & Apply Edits</button>
     </div>
+
+    </div> <!-- /#modeMarkup -->
+
+    <!-- ============== Mode: Batch Data Merge ============== -->
+    <div id="modeDataMerge" class="hidden">
+
+      <div class="step">
+        <label>① Tagged InDesign template (.indd)</label>
+        <p class="hint">An InDesign file with <code>&lt;&lt;placeholder&gt;&gt;</code> Data Merge fields in place of the values that change per record. Use the <strong>placeholders.md</strong> file the app generates from your Excel files as a tagging guide.</p>
+        <div class="pick-row">
+          <input id="dmTemplatePath" type="text" readonly placeholder="No file selected…" />
+          <button id="dmPickTemplate">Browse…</button>
+        </div>
+      </div>
+
+      <div class="step">
+        <label>② Data source</label>
+        <p class="hint">Either Excel files (auto-flattened into a CSV) or an existing CSV. One row per record.</p>
+        <div class="pick-row" style="margin-bottom: 8px;">
+          <label><input type="radio" name="dmSource" value="xlsx" checked /> Excel files (.xlsx)</label>
+          &nbsp;&nbsp;
+          <label><input type="radio" name="dmSource" value="csv" /> Existing CSV</label>
+        </div>
+        <div id="dmXlsxBlock">
+          <p class="hint">One or more Excel workbooks where each sheet is a record (e.g. one sheet per US state). Row 1 = column headers, row 2 = the record's values.</p>
+          <div id="dmXlsxList" class="ref-files-list"></div>
+          <div class="pick-row">
+            <button id="dmAddXlsx">+ Add Excel file…</button>
+          </div>
+        </div>
+        <div id="dmCsvBlock" class="hidden">
+          <p class="hint">A CSV with column headers in row 1 and one record per row. Column names should match your <code>&lt;&lt;placeholder&gt;&gt;</code> tokens.</p>
+          <div class="pick-row">
+            <input id="dmCsvPath" type="text" readonly placeholder="No CSV selected…" />
+            <button id="dmPickCsv">Browse…</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <label>③ Per-record images folder <span class="optional">(optional)</span></label>
+        <p class="hint">A folder of per-record images / illustrations / maps / charts (.ai, .pdf, .eps, .png, .jpg, .tif, .psd) named after each record — e.g. <code>California SEP Map.ai</code>, <code>Texas Office Photo.jpg</code>. The app matches files to records by name and adds an <code>@image</code> column to the merged CSV. Drag <code>@image</code> from the Data Merge panel onto an image frame in your template — InDesign auto-places each record's file at merge time.</p>
+        <div class="pick-row">
+          <input id="dmMapsFolder" type="text" readonly placeholder="No folder selected…" />
+          <button id="dmPickMaps">Browse…</button>
+        </div>
+      </div>
+
+      <div class="step">
+        <label>④ Output folder</label>
+        <p class="hint">One <code>.indd</code> file per record will be written here, named <code>&lt;TemplateName&gt;_&lt;RecordName&gt;.indd</code>.</p>
+        <div class="pick-row">
+          <input id="dmOutDir" type="text" readonly placeholder="No folder selected…" />
+          <button id="dmPickOut">Browse…</button>
+        </div>
+      </div>
+
+      <div class="step">
+        <label>⑤ Record-name column <span class="optional">(optional, default <code>state</code>)</span></label>
+        <p class="hint">The CSV column whose value becomes the suffix in each output filename.</p>
+        <div class="pick-row">
+          <input id="dmNameCol" type="text" placeholder="state" />
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="dmRunBtn" class="primary" disabled>Run Data Merge</button>
+      </div>
+
+    </div> <!-- /#modeDataMerge -->
+
+    <!-- ============== Mode: Tag a Template ============== -->
+    <div id="modeTagTemplate" class="hidden">
+
+      <div class="step">
+        <label>① Untagged InDesign template (.indd)</label>
+        <p class="hint">An InDesign file you designed for one record (e.g. one US state). The app will scan it for that state's values and replace them with <code>&lt;&lt;placeholder&gt;&gt;</code> tokens. Save a backup first — the file is rewritten in place unless you pick an output path.</p>
+        <div class="pick-row">
+          <input id="ttTemplatePath" type="text" readonly placeholder="No file selected…" />
+          <button id="ttPickTemplate">Browse…</button>
+        </div>
+      </div>
+
+      <div class="step">
+        <label>② Excel data files (.xlsx)</label>
+        <p class="hint">Same Excel workbooks as Batch Data Merge — the app reads the reference state's row to know what values to look for in the template.</p>
+        <div id="ttXlsxList" class="ref-files-list"></div>
+        <div class="pick-row">
+          <button id="ttAddXlsx">+ Add Excel file…</button>
+        </div>
+      </div>
+
+      <div class="step">
+        <label>③ Reference state <span class="optional">(default <code>California</code>)</span></label>
+        <p class="hint">The state your template was originally designed for. The app uses this state's values from the Excel files to find the matching text in your template.</p>
+        <div class="pick-row">
+          <input id="ttRefState" type="text" placeholder="California" />
+        </div>
+      </div>
+
+      <div class="step">
+        <label>④ Output location <span class="optional">(optional)</span></label>
+        <p class="hint">Where to save the tagged copy. If blank, the original file is overwritten.</p>
+        <div class="pick-row">
+          <input id="ttOutPath" type="text" readonly placeholder="Same as input (overwrite)" />
+          <button id="ttPickOut">Browse…</button>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="ttRunBtn" class="primary" disabled>Auto-Tag Template</button>
+      </div>
+
+    </div> <!-- /#modeTagTemplate -->
 
     <div id="progress" class="panel progress hidden">
       <h3>Progress</h3>
