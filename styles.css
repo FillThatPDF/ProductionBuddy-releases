@@ -732,3 +732,27 @@ button.secondary:hover { background: rgba(255, 255, 255, 0.08); }
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
+
+/* ========== Restructure Styles modal ========== */
+.modal-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+}
+.modal-panel {
+  background: #1a2332; color: #e6edf3;
+  border-radius: 8px; padding: 24px;
+  width: min(90vw, 900px);
+  box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+}
+.modal-panel h3 { margin: 0 0 8px; }
+.modal-panel .hint { color: #94a3b8; font-size: 13px; margin: 0 0 16px; }
+.rs-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.rs-table th, .rs-table td { padding: 8px 10px; border-bottom: 1px solid #283447; text-align: left; }
+.rs-table th { color: #94a3b8; font-weight: 600; }
+.rs-table input[type="text"].rs-name {
+  background: #0f172a; color: #e6edf3; border: 1px solid #283447;
+  border-radius: 4px; padding: 4px 8px; width: 100%; box-sizing: border-box;
+}
+.rs-table .rs-sample { color: #94a3b8; font-style: italic; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

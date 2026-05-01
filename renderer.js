@@ -786,6 +786,8 @@ $("runBtn").onclick = async () => {
   // Expose to finding-action handlers
   window.__outIndd = outIndd;
   window.__outPdf = outPdf;
+  window.__styleProposalsPath     = (result.result && result.result.style_proposals_path)     || null;
+  window.__hyperlinkProposalsPath = (result.result && result.result.hyperlink_proposals_path) || null;
   $("outIndd").textContent = outIndd;
   $("outIndd").href = "file://" + outIndd;
   $("outIndd").onclick = (e) => { e.preventDefault(); ipcRenderer.invoke("open-file", outIndd); };
@@ -852,6 +854,8 @@ function renderFindings(findings) {
       </div>
       <div class="finding-actions">
         <button class="action-btn primary" data-act="open-indd">Open in InDesign</button>
+        ${f.fixAction === "restructure_styles" ? `<button class="action-btn primary" data-act="restructure">Restructure styles…</button>` : ""}
+        ${f.fixAction === "create_hyperlinks" ? `<button class="action-btn primary" data-act="hyperlinks">Create hyperlinks…</button>` : ""}
         <button class="action-btn" data-act="more">${meta ? "More info ▾" : "Details ▾"}</button>
         <button class="action-btn" data-act="resolve">${isResolved ? "Unresolve" : "Mark resolved"}</button>
         <button class="action-btn danger" data-act="ignore">${isIgnored ? "Un-ignore" : "Ignore future"}</button>
@@ -882,6 +886,10 @@ function renderFindings(findings) {
           else settings.ignoredFindingIds.push(f.id);
           saveSettings();
           renderFindings(window.__findings);
+        } else if (act === "restructure") {
+          openRestructureModal();
+        } else if (act === "hyperlinks") {
+          openHyperlinksModal();
         }
       };
     });
@@ -1015,3 +1023,161 @@ $("clearIgnored").onclick = () => {
 
 // Apply showInfoFindings on load
 if (settings.showInfoFindings) $("filtInfo").checked = true;
+
+// ====================== Restructure styles modal ======================
+function openRestructureModal() {
+  const propsPath = window.__styleProposalsPath;
+  if (!propsPath) {
+    toast("No style proposals available — re-run the markup pipeline first.");
+    return;
+  }
+  let proposals;
+  try { proposals = JSON.parse(fs.readFileSync(propsPath, "utf8")); }
+  catch (e) { toast("Couldn't read proposals: " + e.message); return; }
+  if (!proposals.candidates || !proposals.candidates.length) {
+    toast("No candidate styles in the proposal.");
+    return;
+  }
+
+  // Build modal
+  let modal = document.getElementById("restructureModal");
+  if (modal) modal.remove();
+  modal = document.createElement("div");
+  modal.id = "restructureModal";
+  modal.className = "modal-backdrop";
+  const rows = proposals.candidates.map((c, i) => `
+    <tr data-idx="${i}">
+      <td><input type="checkbox" class="rs-apply" checked></td>
+      <td><input type="text" class="rs-name" value="${escapeHtml(c.proposed_name)}" /></td>
+      <td>${escapeHtml(c.font || "")}</td>
+      <td>${c.size}pt${c.fontStyle && c.fontStyle !== "Regular" ? " " + escapeHtml(c.fontStyle) : ""}</td>
+      <td>${c.count_unstyled} unstyled${c.count_styled ? ` (+${c.count_styled} styled)` : ""}</td>
+      <td class="rs-sample" title="${escapeHtml((c.samples_unstyled[0] || c.samples_styled[0] || {}).text || "")}">
+        ${escapeHtml(((c.samples_unstyled[0] || c.samples_styled[0] || {}).text || "").substring(0, 60))}
+      </td>
+    </tr>
+  `).join("");
+  modal.innerHTML = `
+    <div class="modal-panel" style="max-width: 900px; max-height: 80vh; overflow: auto;">
+      <h3>Restructure paragraph styles</h3>
+      <p class="hint">${proposals.total_unstyled} unstyled paragraph(s) detected${proposals.total_styled ? `, ${proposals.total_styled} already styled (won't be touched)` : ""}. Review the proposed styles below — uncheck any to skip, rename if needed, then click Apply.</p>
+      <table class="rs-table">
+        <thead><tr>
+          <th>Apply</th><th>Name</th><th>Font</th><th>Size</th><th>Coverage</th><th>Sample</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="actions" style="margin-top: 16px;">
+        <button id="rsCancelBtn">Cancel</button>
+        <button id="rsApplyBtn" class="primary">Apply</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  $("rsCancelBtn").onclick = () => modal.remove();
+  $("rsApplyBtn").onclick = async () => {
+    // Persist user edits back into proposals JSON
+    const trs = modal.querySelectorAll("tbody tr");
+    trs.forEach((tr) => {
+      const idx = parseInt(tr.dataset.idx, 10);
+      proposals.candidates[idx].apply = tr.querySelector(".rs-apply").checked;
+      const newName = tr.querySelector(".rs-name").value.trim();
+      if (newName) proposals.candidates[idx].proposed_name = newName;
+    });
+    fs.writeFileSync(propsPath, JSON.stringify(proposals, null, 2));
+
+    $("rsApplyBtn").disabled = true;
+    $("rsApplyBtn").textContent = "Applying…";
+    const result = await ipcRenderer.invoke("run-orchestrator", {
+      mode: "restructure_styles",
+      inddPath: window.__outIndd,
+      proposalsPath: propsPath,
+      pdfOutPath: window.__outPdf || "",
+      settings: settings,
+    });
+    if (result.exitCode === 0) {
+      toast("Styles restructured. Open the InDesign doc to review.");
+      modal.remove();
+    } else {
+      toast("Restructure failed — see logs.");
+      $("rsApplyBtn").disabled = false;
+      $("rsApplyBtn").textContent = "Apply";
+    }
+  };
+}
+
+// ====================== Create hyperlinks modal ======================
+function openHyperlinksModal() {
+  const propsPath = window.__hyperlinkProposalsPath;
+  if (!propsPath) {
+    toast("No hyperlink proposals available — re-run the markup pipeline first.");
+    return;
+  }
+  let proposals;
+  try { proposals = JSON.parse(fs.readFileSync(propsPath, "utf8")); }
+  catch (e) { toast("Couldn't read proposals: " + e.message); return; }
+  if (!proposals.proposals || !proposals.proposals.length) {
+    toast("No hyperlink candidates in the proposal.");
+    return;
+  }
+
+  let modal = document.getElementById("hyperlinksModal");
+  if (modal) modal.remove();
+  modal = document.createElement("div");
+  modal.id = "hyperlinksModal";
+  modal.className = "modal-backdrop";
+  const rows = proposals.proposals.map((p, i) => `
+    <tr data-idx="${i}">
+      <td><input type="checkbox" class="hl-apply" checked></td>
+      <td><span class="hl-kind">${escapeHtml(p.kind)}</span></td>
+      <td><code>${escapeHtml(p.text)}</code></td>
+      <td><input type="text" class="hl-url" value="${escapeHtml(p.proposed_url)}" /></td>
+    </tr>
+  `).join("");
+  modal.innerHTML = `
+    <div class="modal-panel" style="max-width: 900px; max-height: 80vh; overflow: auto;">
+      <h3>Create hyperlinks</h3>
+      <p class="hint">${proposals.proposals.length} unlinked URL/email(s) detected. Review the proposed destinations — uncheck any to skip, edit the URL if needed, then click Apply.</p>
+      <table class="rs-table">
+        <thead><tr>
+          <th>Apply</th><th>Kind</th><th>Visible text</th><th>Destination URL</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="actions" style="margin-top: 16px;">
+        <button id="hlCancelBtn">Cancel</button>
+        <button id="hlApplyBtn" class="primary">Apply</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  $("hlCancelBtn").onclick = () => modal.remove();
+  $("hlApplyBtn").onclick = async () => {
+    const trs = modal.querySelectorAll("tbody tr");
+    trs.forEach((tr) => {
+      const idx = parseInt(tr.dataset.idx, 10);
+      proposals.proposals[idx].apply = tr.querySelector(".hl-apply").checked;
+      const newUrl = tr.querySelector(".hl-url").value.trim();
+      if (newUrl) proposals.proposals[idx].proposed_url = newUrl;
+    });
+    fs.writeFileSync(propsPath, JSON.stringify(proposals, null, 2));
+
+    $("hlApplyBtn").disabled = true;
+    $("hlApplyBtn").textContent = "Applying…";
+    const result = await ipcRenderer.invoke("run-orchestrator", {
+      mode: "create_hyperlinks",
+      inddPath: window.__outIndd,
+      proposalsPath: propsPath,
+      pdfOutPath: window.__outPdf || "",
+      settings: settings,
+    });
+    if (result.exitCode === 0) {
+      toast("Hyperlinks created. Open the InDesign doc to review.");
+      modal.remove();
+    } else {
+      toast("Create hyperlinks failed — see logs.");
+      $("hlApplyBtn").disabled = false;
+      $("hlApplyBtn").textContent = "Apply";
+    }
+  };
+}

@@ -145,6 +145,37 @@ _NOTE_PREFIXES = re.compile(r"^\s*(note|fyi|info|please\s+see|comment)\s*[:.,]?"
 _SINGLE_CAPITALIZED_WORD = re.compile(r"^[A-Z][a-z]+$")
 _TWO_CAP_WORDS = re.compile(r"^[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}$")  # "Bay Fixtures", "Lumen Ranges"
 
+# Map plain-English typographic-symbol names to their Unicode equivalents.
+# Used by the "replace <X> with <Y>" classifier (e.g. "replace comma with an
+# em dash"). Keys are normalized lowercase tokens.
+WORD_TO_CHAR = {
+    "comma": ",",
+    "semicolon": ";",
+    "period": ".", "full stop": ".", "dot": ".",
+    "colon": ":",
+    "exclamation": "!", "exclamation point": "!", "exclamation mark": "!",
+    "question mark": "?",
+    "hyphen": "-", "dash": "-", "minus": "-",
+    "en dash": "–", "endash": "–",
+    "em dash": "—", "emdash": "—",
+    "space": " ",
+    "ampersand": "&", "and sign": "&",
+    "apostrophe": "’",                       # curly apostrophe (typographic default)
+    "single quote": "'", "single quotation": "'",
+    "double quote": "\"", "double quotation": "\"",
+    "open paren": "(", "open parenthesis": "(",
+    "close paren": ")", "close parenthesis": ")",
+    "slash": "/", "forward slash": "/",
+    "backslash": "\\",
+    "asterisk": "*", "star": "*",
+    "plus": "+",
+    "tilde": "~",
+    "underscore": "_",
+    "pipe": "|", "vertical bar": "|",
+    "ellipsis": "…", "ellipses": "…",
+    "bullet": "•",
+}
+
 
 def is_actionable(content):
     """Heuristic: route obvious non-instructions directly to HUMAN_REVIEW
@@ -187,6 +218,36 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
     # encoded by the annotation TYPE, not the content.
     atype = annotation.get("type")
     marked = (annotation.get("marked_text") or "").strip()
+
+    # ---- Caret = explicit insertion. Content is the text to insert,
+    # nearby_text is the word adjacent to the caret position. Acrobat doesn't
+    # encode whether the insertion goes BEFORE or AFTER the nearby word —
+    # default to AFTER, which matches reviewer convention for parenthetical
+    # callouts like "(EV)" / "(LEED Gold)". We only handle this when the
+    # caret is NOT paired with a strikethrough (paired carets are absorbed
+    # into a REPLACE_TEXT edit by the strikethrough handler).
+    if atype == "Caret" and content and not annotation.get("_paired_with_strikethrough"):
+        nearby = (annotation.get("nearby_text") or "").strip()
+        line_text = (annotation.get("line_text") or "").strip()
+        if nearby and line_text and nearby in line_text:
+            # If the inserted content starts with a letter, digit, or opening
+            # bracket, prepend a space — otherwise things like "vehicle(EV)"
+            # collide. Punctuation that naturally follows a word (.,:;!?-)
+            # gets inserted directly without a space.
+            first = content[0]
+            insert_str = (" " + content) if (first.isalnum() or first in "([{\"'") else content
+            new_line = line_text.replace(nearby, nearby + insert_str, 1)
+            if new_line != line_text:
+                edits.append({
+                    "op": "REPLACE_TEXT",
+                    "target": {"find": line_text},
+                    "params": {"replace_with": new_line},
+                    "confidence": 0.85,
+                    "rationale": f"Caret + content → insert '{content[:40]}' after '{nearby[:40]}'",
+                    "source_annotation": f"[Caret on page {annotation.get('page')}]",
+                    "_substitution": (nearby, nearby + insert_str),
+                })
+                return edits, notes
     if marked and atype in ("StrikeOut", "Underline", "Squiggly", "Highlight"):
         if atype == "StrikeOut":
             # Determine the operation: replace (when paired with a nearby
@@ -194,7 +255,7 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
             replacement = (annotation.get("replacement_text") or "").strip()
             line_text = (annotation.get("line_text") or "").strip()
 
-            # Preserve trailing punctuation that belongs to the marked text
+            # Preserve TRAILING punctuation that belongs to the marked text
             # but is missing from the replacement. e.g. reviewer struck
             # "program." (with period attached because PDF word boundaries
             # include trailing punctuation) and the comment is just "Program"
@@ -204,6 +265,80 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
                 last_ch = marked[-1]
                 if last_ch in ".,;:!?)]}" and not replacement.endswith(last_ch):
                     replacement = replacement + last_ch
+            # Same for LEADING punctuation: PDF strike geometry can brush up
+            # against an opening "(", "[", quote, etc., so marked = "(MFG"
+            # while the reviewer only meant to strike "MFG". Without this,
+            # we'd produce "Manufactured Home)" — dropping the open paren.
+            if replacement and marked and len(marked) >= 2:
+                first_ch = marked[0]
+                if first_ch in "([{\"'‘“" and not replacement.startswith(first_ch):
+                    replacement = first_ch + replacement
+
+            # Single-letter case-only fix on a line with multiple matches:
+            # "strike 'p' + comment 'P'" on "program because... perfect place"
+            # — we can't tell which `p` the reviewer meant from the strike
+            # rect alone. Use the paired Caret's nearby_text to pick the
+            # target word; if that's not enough, route to HUMAN_REVIEW.
+            if (replacement and marked and len(marked) == 1 and len(replacement) == 1 and
+                    marked.lower() == replacement.lower() and marked != replacement and
+                    line_text and line_text.lower().count(marked.lower()) > 1):
+                paired_nearby = (annotation.get("paired_nearby_text") or "").strip()
+                target_word = None
+                if paired_nearby:
+                    # Strip trailing punctuation pdfplumber attaches to nearby
+                    # ("straightforward:" → "straightforward")
+                    nb_clean = paired_nearby.rstrip(".,;:!?)]}\"'")
+                    # Case A: the nearby word STARTS with the marked letter
+                    # (e.g. nearby="program", letter="p") — capitalize the
+                    # nearby word itself. We require letter at position 0 to
+                    # avoid mid-word capitalizations like "straightforWard".
+                    if nb_clean.lower().startswith(marked.lower()):
+                        target_word = nb_clean
+                    else:
+                        # Case B: scan forward in line_text from after `nearby`
+                        # for the next word that STARTS with the marked letter.
+                        # Handles two situations:
+                        #   - nearby doesn't contain the letter at all
+                        #     (e.g. nearby="ChargeSmart", letter="p" → "program")
+                        #   - nearby contains the letter mid-word but the
+                        #     reviewer meant the NEXT word
+                        #     (e.g. nearby="straightforward:", letter="w" → "when")
+                        idx = line_text.lower().find(nb_clean.lower())
+                        if idx >= 0:
+                            after = line_text[idx + len(nb_clean):]
+                            for m in re.finditer(r"([A-Za-z][A-Za-z'’-]*)", after):
+                                w = m.group(1)
+                                if w.lower().startswith(marked.lower()):
+                                    target_word = w
+                                    break
+                if target_word and target_word in line_text:
+                    # Capitalize the marked letter in target_word (preserve
+                    # the rest of the word). Most common case: marked is the
+                    # first letter, just capitalize it.
+                    pos = target_word.lower().find(marked.lower())
+                    if pos == 0:
+                        new_word = replacement + target_word[1:]
+                    else:
+                        new_word = target_word[:pos] + replacement + target_word[pos+1:]
+                    new_line = line_text.replace(target_word, new_word, 1)
+                    edits.append({
+                        "op": "REPLACE_TEXT",
+                        "target": {"find": line_text},
+                        "params": {"replace_with": new_line},
+                        "confidence": 0.88,
+                        "rationale": (f"Strikethrough '{marked}' + comment '{replacement}' "
+                                      f"→ capitalize '{target_word}' → '{new_word}' "
+                                      f"(disambiguated via paired nearby='{paired_nearby}')"),
+                        "source_annotation": f"[StrikeOut+Comment on page {annotation.get('page')}]",
+                        "_substitution": (target_word, new_word),
+                    })
+                    return edits, notes
+                edits.append(_human_review(
+                    f"Strikethrough '{marked}' + comment '{replacement}' on a line with "
+                    f"multiple '{marked}' — can't determine which one to capitalize. "
+                    f"Paired nearby: '{paired_nearby}'. Line: {line_text[:120]}",
+                    "Ambiguous single-letter case fix"))
+                return edits, notes
 
             # Paired-with-comment path: reviewer convention is "replace the
             # struck-out text with the comment". Emit ONE scoped replace
@@ -305,6 +440,61 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
                             "_substitution": (marked, new_marked),
                         })
                         return edits, notes
+                # Generic "replace <X> with [an|a] <Y>" instruction — e.g.
+                # "replace comma with an em dash (no spaces)" / "replace
+                # ampersand with and". Maps X and Y to actual characters and
+                # applies within the marked text. The "(no spaces)" /
+                # "(with spaces)" modifier controls whether surrounding
+                # whitespace is consumed/added around the replacement.
+                m = re.match(
+                    r"^\s*replace\s+(?:the\s+|an?\s+)?(.+?)\s+with\s+(?:an?\s+|the\s+)?(.+?)\s*$",
+                    content_norm)
+                if m and marked:
+                    raw_x = m.group(1).strip()
+                    raw_y = m.group(2).strip()
+                    # Detect spacing modifier on the Y side
+                    no_spaces   = bool(re.search(r"\(?\s*no\s+spaces?\s*\)?", raw_y))
+                    with_spaces = bool(re.search(r"\(?\s*with\s+spaces?\s*\)?", raw_y))
+                    # Strip modifiers + filler so we get just the symbol name
+                    def _clean_token(tok):
+                        tok = re.sub(r"\(.*?\)", "", tok)            # drop "(no spaces)"
+                        tok = re.sub(r"\b(no|with)\s+spaces?\b", "", tok)
+                        tok = re.sub(r"\s+", " ", tok).strip()
+                        return tok
+                    word_x = _clean_token(raw_x)
+                    word_y = _clean_token(raw_y)
+                    char_x = WORD_TO_CHAR.get(word_x)
+                    char_y = WORD_TO_CHAR.get(word_y)
+                    if char_x and char_y and char_x in marked:
+                        if no_spaces:
+                            # Drop a single space adjacent to the symbol on
+                            # whichever side it appears (typographer's choice
+                            # — usually the one closer to text).
+                            new_marked = re.sub(
+                                re.escape(char_x) + r"\s",
+                                char_y, marked, count=1)
+                            if new_marked == marked:
+                                new_marked = re.sub(
+                                    r"\s" + re.escape(char_x),
+                                    char_y, marked, count=1)
+                            if new_marked == marked:
+                                new_marked = marked.replace(char_x, char_y, 1)
+                        elif with_spaces:
+                            new_marked = marked.replace(char_x, " " + char_y + " ", 1)
+                        else:
+                            new_marked = marked.replace(char_x, char_y, 1)
+                        if new_marked != marked:
+                            edits.append({
+                                "op": "REPLACE_TEXT",
+                                "target": {"find": marked},
+                                "params": {"replace_with": new_marked},
+                                "confidence": 0.88,
+                                "rationale": f"Highlight + '{content[:50]}' → '{char_x}' → '{char_y}'",
+                                "source_annotation": f"[Highlight on page {annotation.get('page')}]",
+                                "_substitution": (char_x, char_y),
+                            })
+                            return edits, notes
+
                 # "Revise to an em dash with spaces" / "use en dash" — replace
                 # the marked hyphen with the requested dash, scoped to the line.
                 # Convention: en/em dash usually used between space-separated
@@ -1027,6 +1217,10 @@ def _pair_strikethroughs_with_comments(annotations, max_y_pt=15.0, max_x_pt=200.
             i, comment = best
             stk["replacement_text"] = (comment.get("content") or "").strip()
             stk["paired_comment_page"] = comment.get("page")
+            # Propagate the comment's nearby_text — useful for disambiguating
+            # single-letter case fixes ("strikeout 'p' + comment 'P'") when
+            # the line has multiple matching letters.
+            stk["paired_nearby_text"] = (comment.get("nearby_text") or "").strip()
             skip_indices.add(i)
     return skip_indices
 

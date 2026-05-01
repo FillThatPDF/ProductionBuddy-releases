@@ -62,6 +62,21 @@ a = Analysis(
         "unittest",
         "lib2to3",
         "pydoc_data",
+        # The shared venv has heavy ML/data-science deps from unrelated work
+        # (pytorch, polars, pyarrow, opencv, transformers, sklearn, pandas,
+        # scipy, matplotlib, ...). Production Buddy doesn't use any of them
+        # — explicitly exclude so PyInstaller doesn't bundle them. Cuts the
+        # bundle from ~960 MB → ~80 MB.
+        "torch", "torchvision", "torchaudio",
+        "polars", "polars._polars_runtime_32",
+        "pyarrow",
+        "cv2", "opencv-python", "opencv_python", "opencv-python-headless",
+        "transformers", "tokenizers",
+        "sklearn", "scipy", "pandas",
+        "matplotlib", "seaborn",
+        "numba", "llvmlite",
+        "tensorflow", "keras", "jax", "jaxlib",
+        # Note: lxml + cryptography are transitive deps of pikepdf — keep them.
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

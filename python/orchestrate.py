@@ -574,8 +574,10 @@ def run_indesign_script(jsx_path, timeout=1200, engine=None):
     return engine.run_script(jsx_path, timeout=timeout)
 
 
-DATA_MERGE_TEMPLATE = Path(__file__).parent.parent / "jsx" / "data_merge.jsx"
-TAG_TEMPLATE_JSX    = Path(__file__).parent.parent / "jsx" / "tag_template.jsx"
+DATA_MERGE_TEMPLATE       = Path(__file__).parent.parent / "jsx" / "data_merge.jsx"
+TAG_TEMPLATE_JSX          = Path(__file__).parent.parent / "jsx" / "tag_template.jsx"
+RESTRUCTURE_STYLES_JSX    = Path(__file__).parent.parent / "jsx" / "restructure_styles.jsx"
+CREATE_HYPERLINKS_JSX     = Path(__file__).parent.parent / "jsx" / "create_hyperlinks.jsx"
 
 
 def _count_csv_rows(csv_path):
@@ -743,6 +745,124 @@ def main_tag_template(payload):
     log(f"[orchestrate] done — tagged template → {output_path}")
 
 
+def main_restructure_styles(payload):
+    """Apply a paragraph-style restructure proposal that the user reviewed.
+
+    Payload shape:
+      {
+        "mode": "restructure_styles",
+        "inddPath": "/path/to/doc.indd",
+        "proposalsPath": "/path/to/style_proposals.json",
+            (with each candidate annotated `apply: true|false` + optional
+             `proposed_name` rename — the renderer writes this back)
+        "pdfOutPath": "/path/to/out.pdf"   (optional; re-export after applying)
+      }
+    """
+    indd_path     = payload["inddPath"]
+    proposals_in  = payload["proposalsPath"]
+    pdf_out       = payload.get("pdfOutPath") or ""
+    settings      = payload.get("settings") or {}
+
+    log(f"[orchestrate] MODE: restructure_styles")
+    log(f"[orchestrate] indd:  {indd_path}")
+    log(f"[orchestrate] props: {proposals_in}")
+    log(f"[orchestrate] pdf:   {pdf_out or '(skip re-export)'}")
+
+    out_dir = Path(indd_path).parent
+    work_dir = get_work_dir(out_dir, indd_path,
+                             settings.get("cacheRetention", DEFAULT_CACHE_RETENTION))
+    log(f"[orchestrate] WORK: {work_dir}")
+    print(f"[work_dir] {work_dir}", flush=True)
+
+    log_path = work_dir / "restructure_log.txt"
+    log_path.write_text("")
+    jsx_out  = work_dir / "restructure_styles.jsx"
+    render_template(RESTRUCTURE_STYLES_JSX, {
+        "__INDD_PATH__":      str(indd_path),
+        "__PROPOSALS_PATH__": str(proposals_in),
+        "__LOG_PATH__":       str(log_path),
+        "__PDF_OUT_PATH__":   str(pdf_out),
+    }, jsx_out)
+
+    from engines.indesign import InDesignEngine
+    engine = InDesignEngine()
+    proc = run_indesign_script(jsx_out, timeout=600, engine=engine)
+    if proc.returncode != 0:
+        log(f"[orchestrate] restructure failed: {proc.stderr}")
+        sys.exit(proc.returncode)
+
+    try:
+        for line in log_path.read_text().split("\n"):
+            if line.strip(): log(f"[indesign] {line}")
+    except Exception:
+        pass
+
+    (work_dir / "result.json").write_text(json.dumps({
+        "mode": "restructure_styles",
+        "indd_out": str(indd_path),
+        "pdf_out": pdf_out or None,
+    }))
+    log("[orchestrate] done — styles created + applied")
+
+
+def main_create_hyperlinks(payload):
+    """Apply user-reviewed hyperlink proposals.
+
+    Payload shape:
+      {
+        "mode": "create_hyperlinks",
+        "inddPath": "/path/to/doc.indd",
+        "proposalsPath": "/path/to/hyperlink_proposals.json"
+            (with each proposal annotated `apply: true|false`),
+        "pdfOutPath": "/path/..."   (optional; re-export after applying)
+      }
+    """
+    indd_path    = payload["inddPath"]
+    proposals_in = payload["proposalsPath"]
+    pdf_out      = payload.get("pdfOutPath") or ""
+    settings     = payload.get("settings") or {}
+
+    log(f"[orchestrate] MODE: create_hyperlinks")
+    log(f"[orchestrate] indd:  {indd_path}")
+    log(f"[orchestrate] props: {proposals_in}")
+
+    out_dir = Path(indd_path).parent
+    work_dir = get_work_dir(out_dir, indd_path,
+                             settings.get("cacheRetention", DEFAULT_CACHE_RETENTION))
+    log(f"[orchestrate] WORK: {work_dir}")
+    print(f"[work_dir] {work_dir}", flush=True)
+
+    log_path = work_dir / "create_hyperlinks_log.txt"
+    log_path.write_text("")
+    jsx_out  = work_dir / "create_hyperlinks.jsx"
+    render_template(CREATE_HYPERLINKS_JSX, {
+        "__INDD_PATH__":      str(indd_path),
+        "__PROPOSALS_PATH__": str(proposals_in),
+        "__LOG_PATH__":       str(log_path),
+        "__PDF_OUT_PATH__":   str(pdf_out),
+    }, jsx_out)
+
+    from engines.indesign import InDesignEngine
+    engine = InDesignEngine()
+    proc = run_indesign_script(jsx_out, timeout=600, engine=engine)
+    if proc.returncode != 0:
+        log(f"[orchestrate] create_hyperlinks failed: {proc.stderr}")
+        sys.exit(proc.returncode)
+
+    try:
+        for line in log_path.read_text().split("\n"):
+            if line.strip(): log(f"[indesign] {line}")
+    except Exception:
+        pass
+
+    (work_dir / "result.json").write_text(json.dumps({
+        "mode": "create_hyperlinks",
+        "indd_out": str(indd_path),
+        "pdf_out": pdf_out or None,
+    }))
+    log("[orchestrate] done — hyperlinks created")
+
+
 def main_data_merge(payload):
     """Run the Excel → tagged-template → per-state .indd pipeline.
 
@@ -865,6 +985,10 @@ def main():
         return main_data_merge(payload)
     if mode == "tag_template":
         return main_tag_template(payload)
+    if mode == "restructure_styles":
+        return main_restructure_styles(payload)
+    if mode == "create_hyperlinks":
+        return main_create_hyperlinks(payload)
 
     pdf_path = payload["pdfPath"]
     indd_path = payload["inddPath"]
@@ -978,15 +1102,19 @@ def main():
     # 5. Generate and run apply_edits_v2.jsx
     log("[orchestrate] step 4: applying edits + QA scan in InDesign…")
     apply_jsx = work_dir / "apply_edits_v2.jsx"
+    style_proposals_path     = work_dir / "style_proposals.json"
+    hyperlink_proposals_path = work_dir / "hyperlink_proposals.json"
     render_template(engine.apply_template, {
-        "__INDD_PATH__":       str(work_indd),
-        "__PDF_OUT_PATH__":    str(out_pdf),
-        "__LOG_PATH__":        str(log_path),
-        "__FLAGS_PATH__":      str(flags_path),
-        "__FINDINGS_PATH__":   str(findings_path),
-        "__HYPERLINKS_PATH__": str(hyperlinks_path),
-        "__EDITS_PATH__":      str(edits_path),
-        "__QA_CONFIG_PATH__":  str(qa_config_path),
+        "__INDD_PATH__":                 str(work_indd),
+        "__PDF_OUT_PATH__":              str(out_pdf),
+        "__LOG_PATH__":                  str(log_path),
+        "__FLAGS_PATH__":                str(flags_path),
+        "__FINDINGS_PATH__":             str(findings_path),
+        "__HYPERLINKS_PATH__":           str(hyperlinks_path),
+        "__EDITS_PATH__":                str(edits_path),
+        "__QA_CONFIG_PATH__":            str(qa_config_path),
+        "__STYLE_PROPOSALS_PATH__":      str(style_proposals_path),
+        "__HYPERLINK_PROPOSALS_PATH__":  str(hyperlink_proposals_path),
     }, apply_jsx)
     proc = run_indesign_script(apply_jsx, engine=engine)
     if proc.returncode != 0:
@@ -1038,6 +1166,8 @@ def main():
         "pdf_out": str(out_pdf),
         "base_name": new_base,
         "work_dir": str(work_dir),
+        "style_proposals_path":     str(style_proposals_path)     if style_proposals_path.exists()     else None,
+        "hyperlink_proposals_path": str(hyperlink_proposals_path) if hyperlink_proposals_path.exists() else None,
     }))
 
     log("[orchestrate] done")

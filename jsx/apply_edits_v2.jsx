@@ -7,14 +7,16 @@
     var __outerLogPath = "__LOG_PATH__";
     try {
 
-    var inddPath        = "__INDD_PATH__";
-    var pdfOut          = "__PDF_OUT_PATH__";
-    var logPath         = "__LOG_PATH__";
-    var flagsPath       = "__FLAGS_PATH__";
-    var findingsPath    = "__FINDINGS_PATH__";
-    var hyperlinksPath  = "__HYPERLINKS_PATH__";
-    var editsPath       = "__EDITS_PATH__";
-    var qaConfigPath    = "__QA_CONFIG_PATH__";
+    var inddPath          = "__INDD_PATH__";
+    var pdfOut            = "__PDF_OUT_PATH__";
+    var logPath           = "__LOG_PATH__";
+    var flagsPath         = "__FLAGS_PATH__";
+    var findingsPath      = "__FINDINGS_PATH__";
+    var hyperlinksPath    = "__HYPERLINKS_PATH__";
+    var editsPath         = "__EDITS_PATH__";
+    var qaConfigPath      = "__QA_CONFIG_PATH__";
+    var styleProposalsPath     = "__STYLE_PROPOSALS_PATH__";
+    var hyperlinkProposalsPath = "__HYPERLINK_PROPOSALS_PATH__";
 
     // Read QA config (thresholds + disabled checks)
     var qaConfig = { min_dpi: 300, max_fonts: 4, body_size_pt: 14, disabled_checks: {} };
@@ -1368,6 +1370,185 @@
         if (doc.fonts.length > maxFontsThreshold && checkEnabled("FONT_TOO_MANY")) FINDING("warning", "FONT_TOO_MANY", "fonts", "doc", doc.fonts.length + " distinct fonts (consider consolidating to ≤" + maxFontsThreshold + ")");
     }, "fonts");
 
+    // ---- STYLE_RESTRUCTURE: scan unstyled paragraphs and propose new styles ----
+    // Walks every paragraph in every story, fingerprints by font+size+leading+
+    // alignment+color+weight. Paragraphs with an applied style ([Basic Paragraph]
+    // counts as unstyled here too) get the same treatment. Clusters with N+
+    // members become candidate paragraph styles. The proposed map is written
+    // to a sidecar JSON so the renderer can show a review modal; we don't
+    // change anything in the doc — that's only on user opt-in via the
+    // "Restructure styles" button.
+    safe(function () {
+        if (!checkEnabled("STYLE_RESTRUCTURE_CANDIDATES")) return;
+        if (!styleProposalsPath || styleProposalsPath.charAt(0) === "_") return; // not substituted
+        var minClusterSize = (qaConfig.style_restructure_min_cluster || 3);
+
+        function paraFontName(p) {
+            try {
+                var f = p.appliedFont;
+                if (f && f.fullName) return String(f.fullName).split("\t")[0];
+                return String(f || "");
+            } catch (e) { return ""; }
+        }
+        function paraColor(p) {
+            try { return String(p.fillColor && p.fillColor.name ? p.fillColor.name : "Black"); }
+            catch (e) { return "Black"; }
+        }
+        function paraJust(p) { try { return String(p.justification); } catch (e) { return ""; } }
+        function paraStyleName(p) {
+            try {
+                var ps = p.appliedParagraphStyle;
+                return ps ? String(ps.name) : "[None]";
+            } catch (e) { return "[None]"; }
+        }
+        function isUnstyledStyleName(n) {
+            // Treat [None], [Basic Paragraph], "[$ID...]" placeholders as unstyled
+            if (!n) return true;
+            if (n === "[None]" || n === "[Basic Paragraph]") return true;
+            return false;
+        }
+        function round1(n) { return Math.round((Number(n) || 0) * 10) / 10; }
+        function fingerprint(p) {
+            var sz, ld, fs;
+            try { sz = round1(p.pointSize); } catch (e) { sz = 0; }
+            try { ld = (typeof p.leading === "number") ? round1(p.leading) : "auto"; } catch (e) { ld = "auto"; }
+            try { fs = String(p.fontStyle || "Regular"); } catch (e) { fs = "Regular"; }
+            return [paraFontName(p), sz, ld, fs, paraJust(p), paraColor(p)].join("|");
+        }
+
+        var clusters = {};   // signature → { font, size, leading, fontStyle, just, color, members:[{loc, text, styleName}] }
+        var totalScanned = 0;
+        var totalUnstyled = 0;
+        var totalStyled = 0;
+        for (var s = 0; s < doc.stories.length; s++) {
+            var story = doc.stories[s];
+            // Skip very short stories — usually labels / nav, not body
+            try { if (story.paragraphs.length === 0) continue; } catch (e) { continue; }
+            for (var p = 0; p < story.paragraphs.length; p++) {
+                var para;
+                try { para = story.paragraphs[p]; } catch (e) { continue; }
+                var t;
+                try { t = String(para.contents || ""); } catch (e) { continue; }
+                var trimmed = t.replace(/^\s+|\s+$/g, "");
+                if (!trimmed.length) continue; // skip empty paragraphs
+                totalScanned++;
+                var sn = paraStyleName(para);
+                var styled = !isUnstyledStyleName(sn);
+                if (styled) totalStyled++; else totalUnstyled++;
+                // We only PROPOSE for unstyled clusters, but we cluster everything
+                // so the user gets a complete picture in the report.
+                var sig = fingerprint(para);
+                if (!clusters[sig]) {
+                    clusters[sig] = {
+                        signature: sig,
+                        font: paraFontName(para),
+                        size: round1(para.pointSize || 0),
+                        leading: (typeof para.leading === "number" ? round1(para.leading) : "auto"),
+                        fontStyle: String(para.fontStyle || "Regular"),
+                        justification: paraJust(para),
+                        color: paraColor(para),
+                        members_unstyled: [],
+                        members_styled: []
+                    };
+                }
+                var loc = "story" + s + "/p" + p;
+                var bucket = styled ? clusters[sig].members_styled : clusters[sig].members_unstyled;
+                if (bucket.length < 5) {
+                    // Cap samples per cluster — full membership not needed for the modal
+                    bucket.push({ loc: loc, text: trimmed.substring(0, 80), styleName: sn });
+                }
+                // Track total counts even past the sample cap
+                clusters[sig]["count_" + (styled ? "styled" : "unstyled")] =
+                    (clusters[sig]["count_" + (styled ? "styled" : "unstyled")] || 0) + 1;
+            }
+        }
+
+        // Pick clusters that have ≥ minClusterSize unstyled members (those are
+        // the ones we'd actually propose new styles for).
+        var candidates = [];
+        for (var sig in clusters) {
+            if (!clusters.hasOwnProperty(sig)) continue;
+            var c = clusters[sig];
+            var unstyledCount = c.count_unstyled || 0;
+            var styledCount = c.count_styled || 0;
+            if (unstyledCount < minClusterSize) continue;
+            candidates.push({
+                signature: sig, font: c.font, size: c.size, leading: c.leading,
+                fontStyle: c.fontStyle, justification: c.justification, color: c.color,
+                count_unstyled: unstyledCount, count_styled: styledCount,
+                samples_unstyled: c.members_unstyled, samples_styled: c.members_styled
+            });
+        }
+
+        // Sort by font size desc → largest gets H1, next H2, etc.
+        candidates.sort(function (a, b) { return b.size - a.size; });
+
+        // Pick the most-common cluster for "Body" (unless it's also the largest)
+        var bodyIdx = -1, bodyMax = -1;
+        for (var ci = 0; ci < candidates.length; ci++) {
+            if (candidates[ci].count_unstyled > bodyMax) { bodyMax = candidates[ci].count_unstyled; bodyIdx = ci; }
+        }
+        var headIdx = 1;
+        for (var ci2 = 0; ci2 < candidates.length; ci2++) {
+            if (ci2 === bodyIdx && candidates[ci2].size <= 14) {
+                candidates[ci2].proposed_name = "Body";
+            } else if (ci2 === candidates.length - 1 && candidates[ci2].size < 9) {
+                candidates[ci2].proposed_name = "Caption";
+            } else {
+                candidates[ci2].proposed_name = "H" + headIdx;
+                headIdx++;
+            }
+        }
+
+        // Serialize to sidecar JSON
+        var jf = File(styleProposalsPath); jf.encoding = "UTF-8"; jf.open("w");
+        var items = [];
+        for (var k = 0; k < candidates.length; k++) {
+            var cand = candidates[k];
+            var samplesUnstyled = [];
+            for (var sui = 0; sui < cand.samples_unstyled.length; sui++) {
+                samplesUnstyled.push("{\"loc\":" + jsonStr(cand.samples_unstyled[sui].loc) +
+                    ",\"text\":" + jsonStr(cand.samples_unstyled[sui].text) +
+                    ",\"styleName\":" + jsonStr(cand.samples_unstyled[sui].styleName) + "}");
+            }
+            var samplesStyled = [];
+            for (var ssi = 0; ssi < cand.samples_styled.length; ssi++) {
+                samplesStyled.push("{\"loc\":" + jsonStr(cand.samples_styled[ssi].loc) +
+                    ",\"text\":" + jsonStr(cand.samples_styled[ssi].text) +
+                    ",\"styleName\":" + jsonStr(cand.samples_styled[ssi].styleName) + "}");
+            }
+            items.push("{" +
+                "\"signature\":" + jsonStr(cand.signature) + "," +
+                "\"proposed_name\":" + jsonStr(cand.proposed_name) + "," +
+                "\"font\":" + jsonStr(cand.font) + "," +
+                "\"size\":" + cand.size + "," +
+                "\"leading\":" + (cand.leading === "auto" ? "\"auto\"" : cand.leading) + "," +
+                "\"fontStyle\":" + jsonStr(cand.fontStyle) + "," +
+                "\"justification\":" + jsonStr(cand.justification) + "," +
+                "\"color\":" + jsonStr(cand.color) + "," +
+                "\"count_unstyled\":" + cand.count_unstyled + "," +
+                "\"count_styled\":" + cand.count_styled + "," +
+                "\"samples_unstyled\":[" + samplesUnstyled.join(",") + "]," +
+                "\"samples_styled\":[" + samplesStyled.join(",") + "]" +
+            "}");
+        }
+        jf.write("{" +
+            "\"total_scanned\":" + totalScanned + "," +
+            "\"total_styled\":" + totalStyled + "," +
+            "\"total_unstyled\":" + totalUnstyled + "," +
+            "\"min_cluster_size\":" + minClusterSize + "," +
+            "\"candidates\":[" + items.join(",") + "]}");
+        jf.close();
+
+        if (candidates.length > 0) {
+            var msg = "Found " + candidates.length + " candidate paragraph style(s) for "
+                + totalUnstyled + " unstyled paragraph(s)"
+                + (totalStyled > 0 ? " (" + totalStyled + " already styled)" : "")
+                + ". Click 'Restructure styles' to review.";
+            FINDING("info", "STYLE_RESTRUCTURE_CANDIDATES", "styles", "doc", msg, false, "restructure_styles");
+        }
+    }, "style restructure candidates");
+
     // Character styles with no Font Family set inherit at runtime, but the
     // result is unreliable — bullets can render in a fallback font instead
     // of the doc's actual body font. Auto-fix: detect character styles with
@@ -1495,6 +1676,160 @@
             hf.write("[" + items.join(",") + "]"); hf.close();
         } catch (e) {}
     }, "hyperlinks");
+
+    // ---- HYPERLINK_MISSING: detect URLs / emails in body text that aren't
+    // attached to a real hyperlink. Surfaces as a finding with a sidecar
+    // proposal JSON; the renderer offers a "Create hyperlinks" button that
+    // runs jsx/create_hyperlinks.jsx to apply the user-approved set.
+    safe(function () {
+        if (!checkEnabled("HYPERLINK_MISSING")) return;
+        if (!hyperlinkProposalsPath || hyperlinkProposalsPath.charAt(0) === "_") return;
+
+        // Build a set of (storyId, charIndex) ranges that are ALREADY inside a
+        // hyperlink, so we can skip them. Each hyperlink's source has a
+        // sourceText.parentStory + characters[0]/characters[-1] range.
+        var coveredRanges = {}; // storyId → [ [start, end], ... ]
+        for (var h = 0; h < doc.hyperlinks.length; h++) {
+            try {
+                var link = doc.hyperlinks[h];
+                var src = link.source;
+                if (!src || !src.sourceText) continue;
+                var t = src.sourceText;
+                var sid;
+                try { sid = t.parentStory.id; } catch (e) { continue; }
+                var first = -1, last = -1;
+                try { first = t.characters[0].index; last = t.characters[-1].index; } catch (e) {}
+                if (first < 0 || last < 0) continue;
+                if (!coveredRanges[sid]) coveredRanges[sid] = [];
+                coveredRanges[sid].push([first, last]);
+            } catch (e) {}
+        }
+        function isCovered(storyId, idx) {
+            var ranges = coveredRanges[storyId];
+            if (!ranges) return false;
+            for (var i = 0; i < ranges.length; i++) {
+                if (idx >= ranges[i][0] && idx <= ranges[i][1]) return true;
+            }
+            return false;
+        }
+
+        // URL + email detection. Token-based to avoid catastrophic regex
+        // backtracking on long body text — split on whitespace, then validate
+        // each token for an `@` (email) or a known TLD (URL).
+        var TLDS = { com:1, org:1, net:1, gov:1, edu:1, io:1, co:1, us:1, uk:1,
+                     ai:1, app:1, info:1, biz:1, pro:1, tv:1, tech:1 };
+        function isWS(ch) { return ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\f"; }
+        function classifyToken(tok) {
+            // Strip leading/trailing punctuation that's almost never part of a URL
+            var leadRe  = /^[^A-Za-z0-9@\/]+/;
+            var trailRe = /[^A-Za-z0-9\/]+$/;
+            var lead = (tok.match(leadRe) || [""])[0].length;
+            var clean = tok.replace(leadRe, "").replace(trailRe, "");
+            if (!clean) return null;
+            if (clean.indexOf("@") > 0) {
+                // email: word@domain.tld(s)
+                var atIdx = clean.indexOf("@");
+                var local = clean.substring(0, atIdx);
+                var domain = clean.substring(atIdx + 1);
+                if (!local || !domain || domain.indexOf(".") < 1) return null;
+                if (!/^[A-Za-z0-9][\w.+-]*$/.test(local)) return null;
+                if (!/^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(domain)) return null;
+                return { kind: "email", text: clean, lead: lead };
+            }
+            if (clean.indexOf(".") > 0) {
+                var hostPart = clean.split("/")[0].replace(/^https?:\/\//i, "");
+                var bits = hostPart.split(".");
+                if (bits.length < 2) return null;
+                var tld = bits[bits.length - 1].toLowerCase();
+                if (!TLDS[tld]) return null;
+                // Sanity: every host component must be alphanumeric / hyphen
+                for (var bi = 0; bi < bits.length; bi++) {
+                    if (!/^[A-Za-z0-9-]+$/.test(bits[bi])) return null;
+                }
+                return { kind: "url", text: clean, lead: lead };
+            }
+            return null;
+        }
+
+        var proposals = [];
+        var seen = {};
+        var startTime = (new Date()).getTime();
+        var BUDGET_MS = 8000;
+        var aborted = false;
+
+        for (var s = 0; s < doc.stories.length && !aborted; s++) {
+            if ((new Date()).getTime() - startTime > BUDGET_MS) {
+                L("hyperlink scan: budget exceeded after " + s + " story(ies); aborting");
+                aborted = true; break;
+            }
+            var story;
+            try { story = doc.stories[s]; } catch (e) { continue; }
+            var sid;
+            try { sid = story.id; } catch (e) { continue; }
+            var content;
+            try { content = String(story.contents || ""); } catch (e) { continue; }
+            if (!content.length) continue;
+            // Skip very large stories (likely imported / non-body content)
+            if (content.length > 50000) continue;
+
+            // Walk tokens between whitespace boundaries
+            var i = 0, n = content.length;
+            while (i < n) {
+                while (i < n && isWS(content.charAt(i))) i++;
+                if (i >= n) break;
+                var tokStart = i;
+                while (i < n && !isWS(content.charAt(i))) i++;
+                var token = content.substring(tokStart, i);
+                if (token.length < 4) continue; // too short to be a URL/email
+                var info = classifyToken(token);
+                if (!info) continue;
+                var charIdx = tokStart + info.lead;
+                if (isCovered(sid, charIdx)) continue;
+                var clean = info.text;
+                var dest;
+                if (info.kind === "email") {
+                    dest = "mailto:" + clean;
+                } else {
+                    dest = /^https?:\/\//i.test(clean) ? clean : "https://" + clean;
+                }
+                var key = sid + "|" + charIdx + "|" + clean;
+                if (seen[key]) continue;
+                seen[key] = true;
+                proposals.push({
+                    text: clean,
+                    proposed_url: dest,
+                    kind: info.kind,
+                    story_id: sid,
+                    char_index: charIdx
+                });
+            }
+        }
+        L("hyperlink scan: " + proposals.length + " candidate(s) in "
+          + ((new Date()).getTime() - startTime) + "ms"
+          + (aborted ? " (aborted)" : ""));
+
+        // Write sidecar
+        var pf = File(hyperlinkProposalsPath); pf.encoding = "UTF-8"; pf.open("w");
+        var items = [];
+        for (var p = 0; p < proposals.length; p++) {
+            var pr = proposals[p];
+            items.push("{" +
+                "\"text\":" + jsonStr(pr.text) + "," +
+                "\"proposed_url\":" + jsonStr(pr.proposed_url) + "," +
+                "\"kind\":" + jsonStr(pr.kind) + "," +
+                "\"story_id\":" + pr.story_id + "," +
+                "\"char_index\":" + pr.char_index +
+            "}");
+        }
+        pf.write("{\"proposals\":[" + items.join(",") + "]}");
+        pf.close();
+
+        if (proposals.length > 0) {
+            FINDING("info", "HYPERLINK_MISSING", "links", "doc",
+                "Found " + proposals.length + " unlinked URL/email(s). Click 'Create hyperlinks' to review.",
+                false, "create_hyperlinks");
+        }
+    }, "hyperlink missing");
 
     safe(function () {
         var allFrames = doc.textFrames; var oversetFrames = 0, samples = [];
