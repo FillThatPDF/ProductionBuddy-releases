@@ -1257,13 +1257,24 @@
     L("\nSTEP 4: comprehensive QA scan");
 
     safe(function () {
+        // Trailing whitespace before paragraph/line breaks is invisible —
+        // safe to auto-strip. Multi-space sequences are NOT safe to collapse
+        // because designers commonly use 2-3 spaces as a typographic
+        // separator between checkbox/label units, between columnar items,
+        // or to align text. So we now only REPORT multi-space occurrences;
+        // the user can clean those up manually if intended.
         app.findGrepPreferences = NothingEnum.NOTHING; app.changeGrepPreferences = NothingEnum.NOTHING;
-        app.findGrepPreferences.findWhat = "  +"; app.changeGrepPreferences.changeTo = " ";
-        var n1 = doc.changeGrep().length;
+        app.findGrepPreferences.findWhat = "  +";
+        var multiHits = 0;
+        try { multiHits = doc.findGrep().length; } catch (e) {}
         app.findGrepPreferences = NothingEnum.NOTHING; app.changeGrepPreferences = NothingEnum.NOTHING;
         app.findGrepPreferences.findWhat = " +(?=\\r|\\n|$)"; app.changeGrepPreferences.changeTo = "";
-        var n2 = doc.changeGrep().length;
-        if (n1 + n2 > 0) FINDING("info", "TEXT_WHITESPACE", "text", "doc-wide", "auto-fixed " + n1 + " multi-space, " + n2 + " trailing-whitespace occurrence(s)", true);
+        var trimmed = 0;
+        try { trimmed = doc.changeGrep().length; } catch (e) {}
+        if (trimmed > 0) FINDING("info", "TEXT_TRAILING_WS", "text", "doc-wide",
+            "auto-fixed " + trimmed + " trailing-whitespace occurrence(s)", true);
+        if (multiHits > 0) FINDING("info", "TEXT_MULTI_SPACE", "text", "doc-wide",
+            multiHits + " run(s) of 2+ consecutive spaces (left intact — these are often intentional separators in checkbox / columnar layouts)", false);
         app.findGrepPreferences = NothingEnum.NOTHING; app.changeGrepPreferences = NothingEnum.NOTHING;
     }, "whitespace");
 
