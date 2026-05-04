@@ -42,6 +42,42 @@
         L("  [" + severity.toUpperCase() + "] " + id + " " + location + " \u2014 " + message);
     }
     function safe(fn, label) { try { fn(); } catch (e) { L("  ERR in " + label + ": " + e + " (line " + e.line + ")"); } }
+
+    // ---- Sub-step timer for orchestrate-side breakdown of step 4 ----
+    // Call JT_start(label) at the START of each phase (each existing
+    // L("STEP X: ...") line). JT_start() automatically closes the prior
+    // step. JT_summary() at the end emits a sorted breakdown.
+    // orchestrate.py greps `[jsx-timing]` lines out of the apply log and
+    // tees them so step 4's internals show up in the top-level summary.
+    var __jt_total_start = (new Date()).getTime();
+    var __jt_steps = [];
+    var __jt_label = "";
+    var __jt_t = 0;
+    function JT_start(label) {
+        if (__jt_label) {
+            var dt = ((new Date()).getTime() - __jt_t) / 1000;
+            L("[jsx-timing] " + __jt_label + " done in " + dt.toFixed(2) + "s");
+            __jt_steps.push({ label: __jt_label, sec: dt });
+        }
+        __jt_label = label;
+        __jt_t = (new Date()).getTime();
+    }
+    function JT_summary() {
+        if (__jt_label) {
+            var dt = ((new Date()).getTime() - __jt_t) / 1000;
+            L("[jsx-timing] " + __jt_label + " done in " + dt.toFixed(2) + "s");
+            __jt_steps.push({ label: __jt_label, sec: dt });
+            __jt_label = "";
+        }
+        var total = ((new Date()).getTime() - __jt_total_start) / 1000;
+        L("[jsx-timing] === JSX TIMING SUMMARY === total: " + total.toFixed(2) + "s");
+        __jt_steps.sort(function (a, b) { return b.sec - a.sec; });
+        for (var i = 0; i < __jt_steps.length; i++) {
+            var s = __jt_steps[i];
+            var pct = total > 0 ? (100 * s.sec / total) : 0;
+            L("[jsx-timing]   " + s.sec.toFixed(2) + "s (" + pct.toFixed(1) + "%)  " + s.label);
+        }
+    }
     function jsonStr(s) {
         if (s === undefined || s === null) return "null";
         s = String(s); var out = "\"";
@@ -62,6 +98,7 @@
     try { editPlan = eval("(" + editsJson + ")"); } catch (e) { L("Could not parse edits.json: " + e); }
     L("Loaded " + editPlan.edits.length + " edit op(s) and " + (editPlan.human_notes ? editPlan.human_notes.length : 0) + " human note(s)");
 
+    JT_start("step 4.0: starting + opening doc");
     L("STEP 0: starting");
     app.scriptPreferences.userInteractionLevel = UserInteractionLevels.NEVER_INTERACT;
     app.scriptPreferences.enableRedraw = false;
@@ -861,9 +898,142 @@
                 app.findTextPreferences.findWhat = find;
                 app.changeTextPreferences.changeTo = String(replace || "");
                 var hits = doc.changeText().length;
-                L("  replaced " + hits + " occurrence(s) of \"" + find + "\"");
                 app.findTextPreferences = NothingEnum.NOTHING;
                 app.changeTextPreferences = NothingEnum.NOTHING;
+                if (hits > 0) {
+                    L("  replaced " + hits + " occurrence(s) of \"" + find + "\"");
+                }
+
+                // Tiered fallback chain when the literal find returns 0.
+                // PDF extraction commonly disagrees with the InDesign doc on:
+                //   (a) whitespace before punctuation ("measures ." vs "measures.")
+                //   (b) leading auto-list prefixes ("10. Facilitate..." in PDF
+                //       but no "10. " in InDesign because the number comes from
+                //       a paragraph style)
+                // We try literal → normalized → de-listed → de-listed+normalized.
+                function normalizeWS(s) {
+                    // Replace control chars (0x00-0x1F except TAB/LF/CR,
+                    // 0x7F-0x9F) and assorted unicode whitespace (NBSP,
+                    // en/em/figure/thin/zero-width spaces, ideographic
+                    // space) with a regular ASCII space. Done via
+                    // charCodeAt to avoid embedding raw control bytes.
+                    var out = String(s);
+                    var rebuilt = "";
+                    for (var i = 0; i < out.length; i++) {
+                        var c = out.charCodeAt(i);
+                        var isControl = (c < 0x20 && c !== 9 && c !== 10 && c !== 13) ||
+                                        (c >= 0x7F && c <= 0x9F);
+                        var isExoticSpace = c === 0xA0 ||
+                                            (c >= 0x2000 && c <= 0x200B) ||
+                                            c === 0x202F || c === 0x205F || c === 0x3000;
+                        rebuilt += (isControl || isExoticSpace) ? " " : out.charAt(i);
+                    }
+                    return rebuilt
+                        .replace(/\s+([\.,;:!?\)\]\}])/g, "$1")
+                        .replace(/\s{2,}/g, " ")
+                        .replace(/^\s+|\s+$/g, "");
+                }
+                // Build a flexible-whitespace GREP pattern from a literal
+                // find: escape regex metachars, then collapse all whitespace
+                // runs to `\s+`. Lets the search match across NBSP, soft
+                // hyphens, line breaks, etc. that don't appear identically
+                // in InDesign.
+                function escapeForGrep(s) {
+                    return String(s).replace(/[\.\^\$\*\+\?\(\)\[\]\{\}\|\\]/g, "\\$&");
+                }
+                function flexibleGrep(s) {
+                    var escaped = escapeForGrep(s);
+                    return escaped.replace(/\s+/g, "\\s+");
+                }
+                function tryGrep(pattern, replaceTo, label) {
+                    if (!pattern) return 0;
+                    app.findGrepPreferences = NothingEnum.NOTHING;
+                    app.changeGrepPreferences = NothingEnum.NOTHING;
+                    app.findGrepPreferences.findWhat = pattern;
+                    app.changeGrepPreferences.changeTo = replaceTo;
+                    var n = 0;
+                    try { n = doc.changeGrep().length; } catch (e) {}
+                    app.findGrepPreferences = NothingEnum.NOTHING;
+                    app.changeGrepPreferences = NothingEnum.NOTHING;
+                    if (n > 0) L("  replaced " + n + " occurrence(s) of \"" + find + "\"" + (label ? " " + label : ""));
+                    return n;
+                }
+                // Strip leading auto-list prefixes: "10. ", "a) ", "iii. ", "• ", "» "
+                var LIST_PREFIX_RE = /^(?:\d+[\.\)]|[a-zA-Z][\.\)]|[ivxlcdm]+[\.\)]|[•»‣·])\s+/i;
+                function stripList(s) {
+                    return String(s).replace(LIST_PREFIX_RE, "");
+                }
+                function tryLiteral(f, r, label) {
+                    if (!f) return 0;
+                    app.findTextPreferences = NothingEnum.NOTHING;
+                    app.changeTextPreferences = NothingEnum.NOTHING;
+                    app.findTextPreferences.findWhat = f;
+                    app.changeTextPreferences.changeTo = r;
+                    var n = 0;
+                    try { n = doc.changeText().length; } catch (e) {}
+                    app.findTextPreferences = NothingEnum.NOTHING;
+                    app.changeTextPreferences = NothingEnum.NOTHING;
+                    if (n > 0) L("  replaced " + n + " occurrence(s) of \"" + find + "\"" + (label ? " " + label : ""));
+                    return n;
+                }
+                if (hits === 0) {
+                    var normFind = normalizeWS(find);
+                    var normReplace = normalizeWS(String(replace || ""));
+                    if (normFind !== find) hits = tryLiteral(normFind, normReplace, "(after whitespace-normalize fallback)");
+                }
+                if (hits === 0) {
+                    var stripped = stripList(find);
+                    var strippedReplace = stripList(String(replace || ""));
+                    if (stripped !== find) hits = tryLiteral(stripped, strippedReplace, "(after list-prefix-strip fallback)");
+                    if (hits === 0) {
+                        var both = normalizeWS(stripped);
+                        var bothReplace = normalizeWS(strippedReplace);
+                        if (both !== stripped) hits = tryLiteral(both, bothReplace, "(after list-prefix-strip + whitespace-normalize fallback)");
+                    }
+                }
+                // Flexible-whitespace GREP fallback. Builds a pattern from
+                // the normalized find with all whitespace runs replaced by
+                // \s+ so it matches even when InDesign uses NBSPs, soft
+                // hyphens, or different spacing than the PDF extraction.
+                if (hits === 0) {
+                    var normFind2 = normalizeWS(find);
+                    if (normFind2.length >= 6) {
+                        var grepPat = flexibleGrep(normFind2);
+                        var grepReplace = normalizeWS(String(replace || ""));
+                        hits = tryGrep(grepPat, grepReplace, "(after flexible-WS GREP fallback)");
+                    }
+                }
+                // Last resort: marked-scoped fallback (just the changed token,
+                // not the whole line). Used for strike+comment edits where
+                // the line_text from PDF doesn't reconstruct InDesign's text
+                // (cell boundaries, non-breaking spaces, threaded frames).
+                // Python only emits this when marked is unique-enough (≥ 5
+                // alphanumeric chars), so the global-scope replace stays safe.
+                if (hits === 0) {
+                    var fbFind = edit.target && edit.target.fallback_find;
+                    var fbReplace = edit.params && edit.params.fallback_replace_with;
+                    if (fbFind && fbReplace !== undefined) {
+                        hits = tryLiteral(fbFind, fbReplace, "(after marked-scoped fallback)");
+                    }
+                }
+                // Context-extended fallback for short marked tokens (e.g.
+                // "from"+1-word-context = "be from Attic"). Try both literal
+                // and flex-WS GREP variants since cell-boundary text often
+                // has irregular spacing.
+                if (hits === 0) {
+                    var fb2Find = edit.target && edit.target.fallback2_find;
+                    var fb2Replace = edit.params && edit.params.fallback2_replace_with;
+                    if (fb2Find && fb2Replace !== undefined) {
+                        hits = tryLiteral(fb2Find, fb2Replace, "(after context-extended fallback)");
+                        if (hits === 0) {
+                            var grepPat2 = flexibleGrep(normalizeWS(fb2Find));
+                            hits = tryGrep(grepPat2, normalizeWS(fb2Replace), "(after context-extended GREP fallback)");
+                        }
+                    }
+                }
+                if (hits === 0) {
+                    L("  replaced 0 occurrence(s) of \"" + find + "\"");
+                }
             }
             return;
         }
@@ -871,6 +1041,7 @@
         FLAG("Unknown edit op: " + op);
     }
 
+    JT_start("step 4.2: applying edits");
     L("STEP 2: applying edits");
     // Reorder: process DELETE_PAGE last, in REVERSE page order, so earlier
     // deletions don't shift the indices of subsequent ones.
@@ -1124,6 +1295,7 @@
     //   3c: Restore alternating-fill consistency on modified tables
     //   3d: Detect/extend overflowing text frames where safe
     // ==========================================================
+    JT_start("step 4.3: post-edit canonicalization");
     L("\nSTEP 3: post-edit canonicalization");
 
     // 3a: Hyphenation OFF on modified tables
@@ -1254,6 +1426,7 @@
     // ==========================================================
     // STEP 4: COMPREHENSIVE QA SCAN
     // ==========================================================
+    JT_start("step 4.4: comprehensive QA scan");
     L("\nSTEP 4: comprehensive QA scan");
 
     safe(function () {
@@ -1927,6 +2100,7 @@
     //   - "Create Tagged PDF" forced ON at export (handled in STEP 5)
     // ==========================================================
     if (qaConfig.run_508_check) {
+        JT_start("step 4.4b: 508 compliance checks");
         L("\nSTEP 4b: 508 compliance checks");
 
         // ---- WCAG luminance + contrast ratio helpers (sRGB) ----
@@ -2157,6 +2331,7 @@
         L("Wrote " + qaFindings.length + " findings to findings.json");
     }, "findings json");
 
+    JT_start("step 4.5: saving + exporting PDF");
     L("STEP 5: saving + exporting");
     doc.save(File(inddPath));
 
@@ -2227,6 +2402,10 @@
     app.scriptPreferences.enableRedraw = true;
 
     var ff = File(flagsPath); ff.encoding = "UTF-8"; ff.open("w"); ff.write(flags.join("\n")); ff.close();
+
+    // Emit the per-sub-step timing summary so orchestrate.py can tee it
+    // through to /tmp/pb_orchestrate.log alongside the top-level summary.
+    JT_summary();
 
     } catch (e) {
         try {

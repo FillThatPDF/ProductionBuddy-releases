@@ -14,13 +14,28 @@ Setup:
 """
 import json
 import os
+import threading
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1:8b")
 TIMEOUT = 60
+
+# Parallel Ollama requests for multi-annotation jobs. Modern Ollama (0.2+)
+# handles concurrent requests using its OLLAMA_NUM_PARALLEL setting (default
+# 4). On M-series Macs the unified GPU means concurrent calls share the same
+# silicon — we get ~2-3x speedup with 4 workers, not 4x. Higher workers risks
+# saturating the GPU and slowing every request.
+PARALLEL = int(os.environ.get("OLLAMA_PARALLEL", "4"))
+
+# Tell Ollama to keep the model resident long after our last request.
+# Default Ollama keep-alive is 5 min — back-to-back jobs spaced more than
+# 5 min apart pay the full ~5s model-reload cost on every call. 24h covers
+# a typical work day. Override via OLLAMA_KEEP_ALIVE env var.
+KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "24h")
 
 
 SYSTEM_PROMPT = """You are an InDesign production assistant. The user gives you ONE annotation from a marked-up PDF — possibly with extra context fields — and you decide what concrete edit it requests. Output JSON only.
@@ -106,6 +121,70 @@ def model_available(model_name=None):
     return False
 
 
+def warmup(model_name=None):
+    """Pre-pay both costs that bloat the first real Ollama call:
+       1. `load_duration` — model loading into memory (~5s on Mac)
+       2. `prompt_eval_duration` — evaluating the SYSTEM_PROMPT (~3-4s for 1126 tokens)
+
+    Sending the real SYSTEM_PROMPT (with `num_predict: 1` so generation is
+    near-instant) parks the system-prompt KV state in Ollama's cache. When
+    `classify_one` runs later with the same system prompt, Ollama's KV-cache
+    reuse skips the prefill of the matching prefix — first real call pays
+    only for the per-annotation user-message delta (~50–200 tokens).
+
+    Returns immediately — the actual prefill happens in a background thread
+    in parallel with step 1 (PDF extraction) and step 2 (InDesign inspect).
+
+    Safe to call even if Ollama isn't running — silently fails.
+    """
+    model = model_name or OLLAMA_MODEL
+
+    def _do():
+        try:
+            body = {
+                "model": model,
+                "system": SYSTEM_PROMPT,
+                # NB: prompt MUST be non-empty. With prompt="" Ollama short-
+                # circuits and never evaluates the system prompt — the KV
+                # cache stays empty and the next real call pays the full
+                # ~3.6s prefill again. A 1-char prompt is enough to force
+                # the prefill of system + " ." into Ollama's KV cache, so
+                # subsequent classify_one calls skip the system-prompt
+                # prefix and only evaluate their per-annotation user delta.
+                "prompt": ".",
+                "stream": False,
+                "keep_alive": KEEP_ALIVE,
+                "options": {"num_predict": 1, "temperature": 0.1},
+            }
+            req = urllib.request.Request(
+                f"{OLLAMA_URL}/api/generate",
+                data=json.dumps(body).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                # Tee timing so we can see how the warmup actually went.
+                try:
+                    data = json.loads(resp.read())
+                    ld_ms = data.get("load_duration", 0) / 1e6
+                    pe_ms = data.get("prompt_eval_duration", 0) / 1e6
+                    pe_n  = data.get("prompt_eval_count", 0)
+                    line  = (f"[ollama]   warmup complete — load={ld_ms:.0f}ms  "
+                             f"prefill={pe_ms:.0f}ms ({pe_n} tok)")
+                    print(line, flush=True)
+                    try:
+                        with open("/tmp/pb_orchestrate.log", "a", encoding="utf-8") as f:
+                            f.write(line + "\n")
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    threading.Thread(target=_do, daemon=True, name="ollama-warmup").start()
+
+
 def _validate_op(obj, doc_summary):
     """Drop or downgrade ops that look hallucinated. Returns the op (possibly
     rewritten as HUMAN_REVIEW) or None."""
@@ -177,6 +256,7 @@ def classify_one(annotation_content, doc_summary, reference_files_summary,
         "stream": False,
         "format": "json",
         "options": {"temperature": 0.1, "num_predict": 512},
+        "keep_alive": KEEP_ALIVE,
     }
     try:
         req = urllib.request.Request(
@@ -188,6 +268,30 @@ def classify_one(annotation_content, doc_summary, reference_files_summary,
         with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
             data = json.loads(resp.read())
             txt = data.get("response", "")
+            # Print Ollama's per-request timing breakdown so the orchestrate
+            # tee log shows exactly where the wall time went. Durations are
+            # nanoseconds; eval_count is tokens generated.
+            try:
+                ld_ms = data.get("load_duration", 0) / 1e6
+                pe_ms = data.get("prompt_eval_duration", 0) / 1e6
+                pe_n  = data.get("prompt_eval_count", 0)
+                ev_ms = data.get("eval_duration", 0) / 1e6
+                ev_n  = data.get("eval_count", 0)
+                tot_ms = data.get("total_duration", 0) / 1e6
+                tps = (ev_n / (ev_ms / 1000)) if ev_ms > 0 else 0
+                line = (
+                    f"[ollama]   load={ld_ms:.0f}ms  prefill={pe_ms:.0f}ms ({pe_n} tok)  "
+                    f"gen={ev_ms:.0f}ms ({ev_n} tok, {tps:.1f} tok/s)  total={tot_ms:.0f}ms"
+                )
+                print(line, flush=True)
+                # Tee into the timing-investigation log (matches orchestrate.py's _TEE_PATH).
+                try:
+                    with open("/tmp/pb_orchestrate.log", "a", encoding="utf-8") as f:
+                        f.write(line + "\n")
+                except Exception:
+                    pass
+            except Exception:
+                pass
             if not txt:
                 return None
             try:
@@ -233,9 +337,12 @@ def classify_annotations(annotations, doc_inspection, reference_files=None):
             "ext": r.get("ext"),
         })
 
-    edits = []
-    notes = []
-    for ann in annotations:
+    # ---- Parallelized classify loop (Phase 4) ----
+    # Each annotation classify_one is an independent HTTP POST to Ollama —
+    # I/O-bound, perfect for thread parallelism. We dispatch up to PARALLEL
+    # at a time and reassemble in the original annotation order so the
+    # downstream edit application is deterministic.
+    def _one(idx, ann):
         op = classify_one(
             ann.get("content", ""),
             doc_summary,
@@ -245,18 +352,48 @@ def classify_annotations(annotations, doc_inspection, reference_files=None):
             annotation_type=ann.get("type"),
         )
         if not op:
-            edits.append({
+            return idx, {
                 "op": "HUMAN_REVIEW", "target": {}, "params": {}, "confidence": 1.0,
                 "rationale": "Ollama returned no/unparseable output",
                 "source_annotation": ann.get("content", "")[:300],
-            })
-            continue
-        # Validate against doc context — drops malformed/hallucinated ops to HUMAN_REVIEW
+            }, None
         op = _validate_op(op, doc_summary) or {
             "op": "HUMAN_REVIEW", "target": {}, "params": {}, "confidence": 1.0,
             "rationale": "Validation rejected", "source_annotation": ann.get("content", "")[:300],
         }
-        if op.get("op") == "HUMAN_REVIEW" and op.get("rationale", "").lower().startswith("note"):
-            notes.append(ann.get("content", ""))
-        edits.append(op)
-    return {"edits": edits, "human_notes": notes}
+        note = ann.get("content", "") if (
+            op.get("op") == "HUMAN_REVIEW"
+            and str(op.get("rationale", "")).lower().startswith("note")
+        ) else None
+        return idx, op, note
+
+    workers = min(PARALLEL, max(1, len(annotations)))
+    if workers > 1 and len(annotations) > 1:
+        line = (f"[ollama]   dispatching {len(annotations)} classify call(s) "
+                f"with {workers} parallel worker(s)")
+        print(line, flush=True)
+        try:
+            with open("/tmp/pb_orchestrate.log", "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+
+    results = [None] * len(annotations)  # ordered slots
+    notes = []
+    if workers > 1:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ollama") as pool:
+            futures = [pool.submit(_one, i, a) for i, a in enumerate(annotations)]
+            for fut in as_completed(futures):
+                idx, op, note = fut.result()
+                results[idx] = op
+                if note:
+                    notes.append(note)
+    else:
+        # Single-annotation path — keep serial to avoid thread overhead.
+        for i, ann in enumerate(annotations):
+            idx, op, note = _one(i, ann)
+            results[idx] = op
+            if note:
+                notes.append(note)
+
+    return {"edits": results, "human_notes": notes}

@@ -27,6 +27,18 @@
     app.scriptPreferences.userInteractionLevel = UserInteractionLevels.NEVER_INTERACT;
     var doc = app.open(File(inddPath), false);
 
+    // Force POINTS for all geometricBounds / column widths the inspection
+    // emits. Without this, values are returned in whatever measurement unit
+    // the user has configured (inches / picas / cm), which won't match the
+    // PDF annotation coordinates the orchestrator compares them against.
+    var __savedHUnit, __savedVUnit;
+    try {
+        __savedHUnit = doc.viewPreferences.horizontalMeasurementUnits;
+        __savedVUnit = doc.viewPreferences.verticalMeasurementUnits;
+        doc.viewPreferences.horizontalMeasurementUnits = MeasurementUnits.POINTS;
+        doc.viewPreferences.verticalMeasurementUnits   = MeasurementUnits.POINTS;
+    } catch (e) {}
+
     // ---- Style inventories with key property values ----
     function paragraphStyleSummary(ps) {
         return "{" +
@@ -104,10 +116,30 @@
     }
 
     // ---- Per-table inspection ----
-    function inspectTable(tbl, tableId) {
+    function inspectTable(tbl, tableId, frameBounds) {
         var headerRows = tbl.headerRowCount;
         var cols = tbl.columns.length;
         var rows = tbl.rows.length;
+
+        // Capture per-column x-ranges in spread coordinates so the
+        // orchestrator can clip annotation line_text to a single cell
+        // (instead of guessing cell boundaries from a fixed PDF x-gap
+        // threshold). frameBounds is [y1, x1, y2, x2] in spread coords.
+        // Tables can be inset slightly from the frame (text inset), so
+        // we'd ideally use the table's own left edge — but for the v1
+        // we approximate as the frame's left edge, which is close enough
+        // for the cell-clipping use case.
+        var columnEdges = [];
+        try {
+            var x = (frameBounds && frameBounds.length >= 4) ? frameBounds[1] : 0;
+            columnEdges.push(x);
+            for (var ci = 0; ci < cols; ci++) {
+                var w = 0;
+                try { w = tbl.columns[ci].width; } catch (e) { w = 0; }
+                x += w;
+                columnEdges.push(x);
+            }
+        } catch (e) {}
 
         // Header signature (concatenated header cell text)
         var headerCells = [];
@@ -143,6 +175,7 @@
             "\"headerRows\":" + headerRows + "," +
             "\"headerCells\":[" + headerCells.join(",") + "]," +
             "\"firstBodyRow\":[" + bodyRowSample.join(",") + "]," +
+            "\"columnEdges\":[" + columnEdges.join(",") + "]," +
             "\"altFill\":" + jsonStr(altFill.type) + "," +
             "\"appliedTableStyle\":" + jsonStr(safeName(safeProp(tbl, "appliedTableStyle"))) +
         "}";
@@ -160,7 +193,7 @@
             var tables = [];
             try {
                 for (var t = 0; t < tf.tables.length; t++) {
-                    tables.push(inspectTable(tf.tables[t], "p" + (p+1) + "_tf" + f + "_t" + t));
+                    tables.push(inspectTable(tf.tables[t], "p" + (p+1) + "_tf" + f + "_t" + t, bounds));
                 }
             } catch (e) {}
             frames.push("{" +

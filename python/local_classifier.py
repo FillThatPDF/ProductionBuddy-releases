@@ -229,6 +229,69 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
     if atype == "Caret" and content and not annotation.get("_paired_with_strikethrough"):
         nearby = (annotation.get("nearby_text") or "").strip()
         line_text = (annotation.get("line_text") or "").strip()
+
+        # Special case: comma caret intended as thousands separator on a
+        # currency value. Reviewers commonly draw a caret inside a 4+ digit
+        # number ("$1750") meaning "format with comma" → "$1,750". But
+        # pdfplumber's nearby_text often picks up a word from an adjacent
+        # cell ("Rebate") instead of the actual number, which would cause
+        # us to insert a stray comma after the wrong word. Detect:
+        #   (a) content is just "," — and
+        #   (b) line_text contains a 4+ digit run of digits with no commas
+        # and rewrite that number with thousands separators instead. If
+        # neither marked nor line_text has such a number, route to HUMAN_REVIEW
+        # rather than place the comma in a misleading location.
+        if content.strip() == ",":
+            target_num = None
+            target_text = line_text or ""
+            num_match = re.search(r"\$?(\d{4,})\b", target_text)
+            if num_match:
+                target_num = num_match.group(1)
+            else:
+                # Broaden search to the whole table cell — reviewers often
+                # draw the caret on a line BELOW the $XXXX amount in a
+                # multi-line cell ("$1000\nRebate includes cost\n..."), so
+                # line_text on its own is just "Rebate includes cost". The
+                # column_block_text field captures ±2 lines × narrow column
+                # width around the caret. Restrict to one unique 4+ digit
+                # number — if the cell has multiple, abstain to avoid
+                # comma-formatting the wrong one.
+                block_text = (annotation.get("column_block_text") or "").strip()
+                if block_text:
+                    found_nums = re.findall(r"\$?(\d{4,})\b", block_text)
+                    # Dedup while preserving order
+                    seen = set(); unique_nums = []
+                    for n in found_nums:
+                        if n not in seen:
+                            seen.add(n); unique_nums.append(n)
+                    if len(unique_nums) == 1:
+                        target_num = unique_nums[0]
+            if target_num:
+                with_commas = "{:,}".format(int(target_num))
+                # Use the BARE number as the find string (line-scoped find
+                # often fails because the caret + number live in a table cell
+                # that pdfplumber couldn't reconstruct cleanly). The number
+                # itself is unique enough to be safe doc-wide as long as it's
+                # 4+ digits. Add a fallback to the line scope as well.
+                edits.append({
+                    "op": "REPLACE_TEXT",
+                    "target": {"find": target_num, "fallback_find": target_num},
+                    "params": {"replace_with": with_commas, "fallback_replace_with": with_commas},
+                    "confidence": 0.85,
+                    "rationale": f"Caret + ',' → format '{target_num}' as '{with_commas}'",
+                    "source_annotation": f"[Caret on page {annotation.get('page')}]",
+                })
+                return edits, notes
+            # No 4+ digit number nearby — the user's intent is unclear (we
+            # can't see the actual cell the caret was placed in), so don't
+            # guess and corrupt unrelated text.
+            edits.append(_human_review(
+                f"Comma caret near '{nearby}' — couldn't locate a 4+ digit "
+                f"number to format with thousands separator. Line: '{line_text[:120]}'. "
+                f"Place the comma manually.",
+                "Comma caret with no clear currency context"))
+            return edits, notes
+
         if nearby and line_text and nearby in line_text:
             # If the inserted content starts with a letter, digit, or opening
             # bracket, prepend a space — otherwise things like "vehicle(EV)"
@@ -236,18 +299,64 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
             # gets inserted directly without a space.
             first = content[0]
             insert_str = (" " + content) if (first.isalnum() or first in "([{\"'") else content
-            new_line = line_text.replace(nearby, nearby + insert_str, 1)
+            # If nearby ends in sentence-final punctuation, the reviewer
+            # almost always wants the insertion BEFORE the punctuation
+            # (e.g. nearby="level ." + content="(AMI)" → "...level (AMI). For").
+            # pdfplumber commonly glues the punctuation onto the trailing
+            # word, so without this branch the new content lands AFTER
+            # the period instead of before.
+            new_line = None
+            tail_match = re.search(r"[\.\,\;\:\!\?]+$", nearby)
+            if tail_match:
+                trailing_punct = tail_match.group(0)
+                nearby_clean = nearby[:-len(trailing_punct)].rstrip()
+                if nearby_clean:
+                    pat = re.escape(nearby_clean) + r"\s*" + re.escape(trailing_punct)
+                    candidate, n_subs = re.subn(
+                        pat,
+                        nearby_clean + insert_str + trailing_punct,
+                        line_text, count=1)
+                    if n_subs > 0:
+                        new_line = candidate
+            if new_line is None:
+                new_line = line_text.replace(nearby, nearby + insert_str, 1)
             if new_line != line_text:
                 edits.append({
                     "op": "REPLACE_TEXT",
                     "target": {"find": line_text},
                     "params": {"replace_with": new_line},
                     "confidence": 0.85,
-                    "rationale": f"Caret + content → insert '{content[:40]}' after '{nearby[:40]}'",
+                    "rationale": f"Caret + content → insert '{content[:40]}' near '{nearby[:40]}'",
                     "source_annotation": f"[Caret on page {annotation.get('page')}]",
-                    "_substitution": (nearby, nearby + insert_str),
                 })
                 return edits, notes
+    # Whitespace-only strike: the reviewer struck through one of two
+    # adjacent space characters to delete the redundant one. extract_annotations
+    # detected this and stashed surrounding chars in `whitespace_strike_context`.
+    # Emit a GREP REPLACE_TEXT that collapses the multi-space to single, scoped
+    # by the flanking words so we don't accidentally collapse legitimate
+    # multi-space layout (e.g. checkbox columns, table separators).
+    ws_ctx = annotation.get("whitespace_strike_context") if atype == "StrikeOut" else None
+    if ws_ctx and ws_ctx.get("before") and ws_ctx.get("after"):
+        before_grep = re.escape(ws_ctx["before"])
+        after_grep = re.escape(ws_ctx["after"])
+        edits.append({
+            "op": "REPLACE_TEXT",
+            "target": {"find": before_grep + r"\s\s+" + after_grep},
+            "params": {
+                "replace_with": ws_ctx["before"] + " " + ws_ctx["after"],
+                "is_regex": True,
+            },
+            "confidence": 0.85,
+            "rationale": (
+                f"Strikethrough on extra whitespace between "
+                f"'{ws_ctx['before'][:30]}' and '{ws_ctx['after'][:30]}' (GREP) → "
+                f"collapsed multi-space to single"
+            ),
+            "source_annotation": f"[StrikeOut on page {annotation.get('page')}]",
+        })
+        return edits, notes
+
     if marked and atype in ("StrikeOut", "Underline", "Squiggly", "Highlight"):
         if atype == "StrikeOut":
             # Determine the operation: replace (when paired with a nearby
@@ -255,15 +364,48 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
             replacement = (annotation.get("replacement_text") or "").strip()
             line_text = (annotation.get("line_text") or "").strip()
 
+            # If the marked text has an unbalanced opening bracket — e.g.
+            # marked="Quality Assurance/Quality Control (QA/QC" with a "(" but
+            # no matching ")" — pdfplumber clipped the strike at a word
+            # boundary inside the parenthetical. Walk forward in line_text
+            # to find the matching ")" and extend the marked range so the
+            # delete/replace consumes both halves of the parenthetical.
+            extended_for_balance = False
+            if marked and line_text and marked in line_text:
+                open_count = marked.count("(") - marked.count(")")
+                if open_count > 0:
+                    start = line_text.find(marked)
+                    end = start + len(marked)
+                    extra = 0
+                    while end + extra < len(line_text) and open_count > 0 and extra < 80:
+                        ch = line_text[end + extra]
+                        if ch == "(": open_count += 1
+                        elif ch == ")": open_count -= 1
+                        extra += 1
+                    if open_count == 0 and extra > 0:
+                        marked = line_text[start:end + extra]
+                        extended_for_balance = True
+
             # Preserve TRAILING punctuation that belongs to the marked text
             # but is missing from the replacement. e.g. reviewer struck
             # "program." (with period attached because PDF word boundaries
             # include trailing punctuation) and the comment is just "Program"
             # — we should produce "Program." not "Program" (the period was
-            # never meant to be deleted).
-            if replacement and marked and len(marked) >= 2:
+            # never meant to be deleted). Skipped when:
+            #   - we extended marked to balance parens (trailing ")" was
+            #     deliberately consumed)
+            #   - the trailing char is a closing bracket whose opening
+            #     counterpart is also inside marked — that's a balanced pair
+            #     the reviewer deliberately struck through
+            if (replacement and marked and len(marked) >= 2 and
+                    not extended_for_balance):
                 last_ch = marked[-1]
-                if last_ch in ".,;:!?)]}" and not replacement.endswith(last_ch):
+                paired_brackets = {")": "(", "]": "[", "}": "{"}
+                opener = paired_brackets.get(last_ch)
+                bracket_was_paired = opener is not None and opener in marked
+                if (last_ch in ".,;:!?)]}" and
+                        not replacement.endswith(last_ch) and
+                        not bracket_was_paired):
                     replacement = replacement + last_ch
             # Same for LEADING punctuation: PDF strike geometry can brush up
             # against an opening "(", "[", quote, etc., so marked = "(MFG"
@@ -284,7 +426,17 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
                     line_text and line_text.lower().count(marked.lower()) > 1):
                 paired_nearby = (annotation.get("paired_nearby_text") or "").strip()
                 target_word = None
-                if paired_nearby:
+
+                # FIRST try: marked_word — the actual word the strike rect
+                # overlapped (captured by extract_annotations). This is the
+                # most reliable disambiguator because it uses the strike's
+                # spatial position, not the paired comment's nearby text
+                # (which may be on a different line entirely).
+                marked_word = (annotation.get("marked_word") or "").strip()
+                if marked_word and marked_word in line_text:
+                    target_word = marked_word
+
+                if not target_word and paired_nearby:
                     # Strip trailing punctuation pdfplumber attaches to nearby
                     # ("straightforward:" → "straightforward")
                     nb_clean = paired_nearby.rstrip(".,;:!?)]}\"'")
@@ -321,17 +473,28 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
                     else:
                         new_word = target_word[:pos] + replacement + target_word[pos+1:]
                     new_line = line_text.replace(target_word, new_word, 1)
-                    edits.append({
+                    fb_find, fb_replace, fb2_find, fb2_replace = _build_fallback_targets(target_word, new_word, line_text)
+                    disambig_via = (
+                        f"strike-rect → '{target_word}'"
+                        if marked_word and target_word == marked_word
+                        else f"paired nearby='{paired_nearby}'"
+                    )
+                    cap_edit = {
                         "op": "REPLACE_TEXT",
                         "target": {"find": line_text},
                         "params": {"replace_with": new_line},
                         "confidence": 0.88,
                         "rationale": (f"Strikethrough '{marked}' + comment '{replacement}' "
                                       f"→ capitalize '{target_word}' → '{new_word}' "
-                                      f"(disambiguated via paired nearby='{paired_nearby}')"),
+                                      f"(disambiguated via {disambig_via})"),
                         "source_annotation": f"[StrikeOut+Comment on page {annotation.get('page')}]",
                         "_substitution": (target_word, new_word),
-                    })
+                    }
+                    if fb_find: cap_edit["target"]["fallback_find"] = fb_find
+                    if fb_replace is not None: cap_edit["params"]["fallback_replace_with"] = fb_replace
+                    if fb2_find: cap_edit["target"]["fallback2_find"] = fb2_find
+                    if fb2_replace is not None: cap_edit["params"]["fallback2_replace_with"] = fb2_replace
+                    edits.append(cap_edit)
                     return edits, notes
                 edits.append(_human_review(
                     f"Strikethrough '{marked}' + comment '{replacement}' on a line with "
@@ -348,7 +511,8 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
             if replacement and line_text and marked in line_text:
                 new_line = line_text.replace(marked, replacement, 1)
                 new_line = re.sub(r"\s{2,}", " ", new_line).strip()
-                edits.append({
+                fb_find, fb_replace, fb2_find, fb2_replace = _build_fallback_targets(marked, replacement, line_text)
+                edit = {
                     "op": "REPLACE_TEXT",
                     "target": {"find": line_text},
                     "params": {"replace_with": new_line},
@@ -356,7 +520,12 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
                     "rationale": f"Strikethrough + comment → replace '{marked[:40]}' with '{replacement[:40]}'",
                     "source_annotation": f"[StrikeOut+Comment on page {annotation.get('page')}]",
                     "_substitution": (marked, replacement),
-                })
+                }
+                if fb_find: edit["target"]["fallback_find"] = fb_find
+                if fb_replace is not None: edit["params"]["fallback_replace_with"] = fb_replace
+                if fb2_find: edit["target"]["fallback2_find"] = fb2_find
+                if fb2_replace is not None: edit["params"]["fallback2_replace_with"] = fb2_replace
+                edits.append(edit)
                 return edits, notes
             # Paired but line_text doesn't contain marked (mismatched
             # line reconstruction) — fall back to a non-scoped replace.
@@ -380,7 +549,66 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
             if line_text and marked in line_text:
                 line_minus = line_text.replace(marked, "", 1)
                 line_minus = re.sub(r"\s{2,}", " ", line_minus).strip()
-                edits.append({
+                fb_find, fb_replace, fb2_find, fb2_replace = _build_fallback_targets(marked, "", line_text)
+
+                # When `marked` is sentence-length (≥25 chars with a space),
+                # it's effectively unique in the doc. Prefer a SCOPED-MARKED
+                # delete as the primary target — that preserves the formatting
+                # of surrounding runs (italic, bold, smaller weight, etc.).
+                # InDesign's findText/changeText REPLACES formatting at the
+                # match site with the insertion-point style, so a whole-line
+                # replace clobbers any per-run formatting inside that line.
+                # By deleting only the marked characters, surrounding runs
+                # stay intact. The whole-line replace remains as a fallback
+                # for cases where the marked text spans a run boundary or
+                # has hidden chars and can't be matched literally.
+                #
+                # We extend the find to include the leading space (or the
+                # trailing space if marked is at line start) so the result
+                # doesn't end up with a double space between the surviving
+                # neighbors. This is what `line_minus` was doing implicitly
+                # via its `re.sub(r"\s{2,}", " ", ...)` cleanup.
+                is_marked_safe_global = (
+                    len(marked.strip()) >= 25 and " " in marked.strip()
+                )
+                if is_marked_safe_global:
+                    marked_pos = line_text.find(marked)
+                    if marked_pos > 0 and line_text[marked_pos - 1] == " ":
+                        scoped_find = " " + marked
+                    elif marked_pos == 0:
+                        end_pos = marked_pos + len(marked)
+                        if end_pos < len(line_text) and line_text[end_pos] == " ":
+                            scoped_find = marked + " "
+                        else:
+                            scoped_find = marked
+                    else:
+                        scoped_find = marked
+                    del_edit = {
+                        "op": "REPLACE_TEXT",
+                        "target": {
+                            "find": scoped_find,
+                            # Whole-line replace as fallback if the marked-
+                            # scoped delete doesn't match (run-boundary etc.)
+                            "fallback_find": line_text,
+                        },
+                        "params": {
+                            "replace_with": "",
+                            "fallback_replace_with": line_minus,
+                        },
+                        "confidence": 0.88,
+                        "rationale": (
+                            f"Strikethrough annotation → marked-scoped delete "
+                            f"'{marked[:50]}' (preserves surrounding formatting)"
+                        ),
+                        "source_annotation": f"[StrikeOut on page {annotation.get('page')}]",
+                        "_substitution": (marked, ""),
+                    }
+                    if fb2_find: del_edit["target"]["fallback2_find"] = fb2_find
+                    if fb2_replace is not None: del_edit["params"]["fallback2_replace_with"] = fb2_replace
+                    edits.append(del_edit)
+                    return edits, notes
+
+                del_edit = {
                     "op": "REPLACE_TEXT",
                     "target": {"find": line_text},
                     "params": {"replace_with": line_minus},
@@ -388,7 +616,12 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
                     "rationale": f"Strikethrough annotation → scoped delete '{marked[:50]}' from its line",
                     "source_annotation": f"[StrikeOut on page {annotation.get('page')}]",
                     "_substitution": (marked, ""),
-                })
+                }
+                if fb_find: del_edit["target"]["fallback_find"] = fb_find
+                if fb_replace is not None: del_edit["params"]["fallback_replace_with"] = fb_replace
+                if fb2_find: del_edit["target"]["fallback2_find"] = fb2_find
+                if fb2_replace is not None: del_edit["params"]["fallback2_replace_with"] = fb2_replace
+                edits.append(del_edit)
                 return edits, notes
             # No line context available. Only do a global delete if the
             # marked text is long enough to be unique (≥4 chars and contains
@@ -422,6 +655,107 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
             content_norm = (content or "").strip().lower().rstrip(".")
             line_text = (annotation.get("line_text") or "").strip()
             if atype == "Highlight" and content:
+                # "Is there an extra space after period? If so, please remove"
+                # — a hedged instruction. Detect the "extra space" + "remove"
+                # combination and look in marked_text (or line_text) for an
+                # actual `\s{2,}` after a period/comma/colon. If found, fix
+                # it; if not, route to HUMAN_REVIEW instead of guessing.
+                extra_space_kw = (
+                    ("extra" in content_norm and "space" in content_norm and "remove" in content_norm) or
+                    ("double" in content_norm and "space" in content_norm and "remove" in content_norm)
+                )
+                if extra_space_kw:
+                    # Determine which punct the reviewer asked about.
+                    punct_map = [
+                        ("period", r"\."),
+                        ("comma", r","),
+                        ("colon", r":"),
+                        ("semicolon", r";"),
+                    ]
+                    target_punct_re = None
+                    for word, regex in punct_map:
+                        if word in content_norm:
+                            target_punct_re = regex; break
+                    # Default to "after period" if not specified
+                    if target_punct_re is None:
+                        target_punct_re = r"\."
+                    # Look for the offending pattern in marked first, then line_text.
+                    # Note: PyMuPDF normalizes whitespace during text extraction, so
+                    # `\s{2,}` is rarely present even when InDesign's source DOES
+                    # have a double space. We try the literal-find path first
+                    # (works if PyMuPDF preserved the spacing); if that fails, we
+                    # fall through to a GREP-based REPLACE_TEXT that InDesign's
+                    # findGrep runs against its OWN text (which does have the
+                    # original spacing). The GREP only collapses runs of 2+
+                    # spaces, so already-correct text is left untouched.
+                    for scope, scope_text in (("marked", marked), ("line", line_text)):
+                        if not scope_text: continue
+                        new_text = re.sub(target_punct_re + r"\s{2,}",
+                                          lambda m: m.group(0)[0] + " ",
+                                          scope_text, count=1)
+                        if new_text != scope_text:
+                            find_str = scope_text
+                            edits.append({
+                                "op": "REPLACE_TEXT",
+                                "target": {"find": find_str},
+                                "params": {"replace_with": new_text},
+                                "confidence": 0.9,
+                                "rationale": f"Highlight + 'extra space after {target_punct_re}' → collapsed to single space",
+                                "source_annotation": f"[Highlight on page {annotation.get('page')}]",
+                            })
+                            return edits, notes
+
+                    # PyMuPDF normalized the whitespace away — fall back to a
+                    # GREP that InDesign runs against its non-normalized source.
+                    # Two patterns based on what the reviewer's comment says:
+                    is_before = (
+                        "in front of" in content_norm
+                        or "before" in content_norm
+                        or "prior to" in content_norm
+                    )
+                    is_after = ("after" in content_norm)
+
+                    grep_find = None
+                    grep_replace = None
+                    rationale_suffix = None
+                    if marked:
+                        # Build patterns scoped to the marked word so we don't
+                        # accidentally collapse a deliberate double-space
+                        # somewhere else in the doc (e.g. checkbox separators).
+                        marked_grep = re.escape(marked)
+                        if is_before:
+                            # "extra space in front of <X>" → " +<X>" → "<X>"
+                            grep_find = r"  +" + marked_grep
+                            grep_replace = marked
+                            rationale_suffix = f"removed leading whitespace before '{marked[:30]}'"
+                        elif is_after:
+                            # "extra space after <X>" — usually X ends with the
+                            # punctuation in the comment, so trim spaces AFTER
+                            # the marked text.
+                            grep_find = marked_grep + r"  +"
+                            grep_replace = marked + " "
+                            rationale_suffix = f"collapsed multi-space after '{marked[:30]}'"
+                    if grep_find:
+                        edits.append({
+                            "op": "REPLACE_TEXT",
+                            "target": {"find": grep_find},
+                            "params": {
+                                "replace_with": grep_replace,
+                                "is_regex": True,
+                            },
+                            "confidence": 0.85,
+                            "rationale": f"Highlight + 'extra space {('before' if is_before else 'after')} <marked>' (GREP) → {rationale_suffix}",
+                            "source_annotation": f"[Highlight on page {annotation.get('page')}]",
+                        })
+                        return edits, notes
+
+                    # No actionable form — surface for manual review.
+                    edits.append(_human_review(
+                        f"Reviewer asked about extra space ('{content[:80]}'); no double-space "
+                        f"found in marked text — please verify visually",
+                        "Hedged-instruction extra-space check"))
+                    return edits, notes
+
                 if content_norm.startswith("lowercase") and marked:
                     new_marked = marked.lower()
                     if new_marked != marked:
@@ -513,9 +847,14 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
                             "_substitution": (" - ", " — "),
                         })
                         return edits, notes
-                if (("en dash" in content_norm or "en-dash" in content_norm) and
-                        marked in ("-", "--")):
-                    if line_text and " - " in line_text:
+                if (("en dash" in content_norm or "en-dash" in content_norm)):
+                    # Two situations:
+                    #   - marked is "-" / "--" and line has " - "  → swap dash type
+                    #   - marked spans text containing any dash (-, –, —) with
+                    #     possibly-no surrounding spaces → swap dash type AND
+                    #     ensure single space on each side ("with spaces" case)
+                    want_spaces = "with space" in content_norm
+                    if marked in ("-", "--") and line_text and " - " in line_text:
                         new_line = line_text.replace(" - ", " – ", 1)
                         edits.append({
                             "op": "REPLACE_TEXT",
@@ -527,6 +866,36 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
                             "_substitution": (" - ", " – "),
                         })
                         return edits, notes
+                    # Generic dash-anywhere-in-marked case (covers "ge–in"
+                    # when reviewer highlights around an en-dash with no
+                    # surrounding spaces and asks for "en dash with spaces")
+                    if marked and re.search(r"[\-–—]", marked):
+                        if want_spaces:
+                            # Replace any dash run (with optional surrounding
+                            # whitespace) with " – " so the dash always has
+                            # exactly one space each side.
+                            new_marked = re.sub(r"\s*[\-–—]+\s*", " – ", marked)
+                        else:
+                            # Just swap dash type, preserve existing spacing
+                            new_marked = re.sub(r"[\-—]", "–", marked)
+                        if new_marked != marked:
+                            find_str = line_text if (line_text and marked in line_text) else marked
+                            replace_str = (
+                                line_text.replace(marked, new_marked, 1)
+                                if line_text and marked in line_text else new_marked
+                            )
+                            edits.append({
+                                "op": "REPLACE_TEXT",
+                                "target": {"find": find_str},
+                                "params": {"replace_with": replace_str},
+                                "confidence": 0.88,
+                                "rationale": (f"Highlight + 'en dash"
+                                              + (" with spaces" if want_spaces else "")
+                                              + f"' → '{marked[:30]}' → '{new_marked[:30]}'"),
+                                "source_annotation": f"[Highlight on page {annotation.get('page')}]",
+                                "_substitution": (marked, new_marked),
+                            })
+                            return edits, notes
 
                 # "Insert a space on both sides of this mathematical symbol"
                 # The reviewer can highlight either:
@@ -1096,6 +1465,63 @@ def _looks_like_correction(original, replacement):
     return False
 
 
+def _build_fallback_targets(marked, replacement, line_text):
+    """Build the optional fallback_find / fallback2_find / fallback_replace_with /
+    fallback2_replace_with values that get attached to a REPLACE_TEXT edit.
+
+    Returns (fb_find, fb_replace, fb2_find, fb2_replace). Any of them may
+    be None if not applicable. Used by strike+comment, strike-only-delete,
+    and the disambiguated single-letter-case-fix paths so the JSX can fall
+    back when a long line-scoped find doesn't match InDesign's actual text
+    (cell boundaries, threaded frames, NBSP, etc.).
+
+    Rules:
+      - fb_find: just `marked`, when len(marked) >= 5 AND has alphanumerics.
+        Safe doc-wide for unique-ish substrings.
+      - fb2_find: marked + 1 word of context on each side from line_text.
+        Captures cases like "&" / "from" / "be" — too short to be safe
+        globally, but uniquely identifiable with a tiny bit of surrounding
+        context. Only emitted when meaningfully longer than the marked itself.
+    """
+    fb_find = fb_replace = None
+    fb2_find = fb2_replace = None
+    if marked and len(marked) >= 5 and any(ch.isalnum() for ch in marked):
+        fb_find = marked
+        fb_replace = replacement
+    if marked and line_text:
+        idx = line_text.find(marked)
+        if idx >= 0:
+            before = line_text[:idx].rstrip()
+            after = line_text[idx + len(marked):].lstrip()
+            bm = re.search(r"(\S+)\s*$", before)
+            am = re.match(r"\s*(\S+)", after)
+            bw = bm.group(1) if bm else ""
+            aw = am.group(1) if am else ""
+            # Single-char punctuation marks (`:`, `.`, `,`, `;`, `?`, `!`)
+            # use a LEFT-only context: the after-context word may be a
+            # form-field glyph (☐, ■) or other non-text run that lives in
+            # the same `line_text`, and including it as context can cause
+            # the GREP fallback to consume an adjacent checkbox alongside
+            # the punctuation we're trying to delete. Binding the find
+            # tightly to the preceding word ("property?" + ":") keeps the
+            # delete surgical without touching anything to the right.
+            is_punct_only = (len(marked) == 1 and not marked.isalnum() and
+                             marked in ".,;:!?")
+            if is_punct_only and bw:
+                ctx_find = bw + marked
+                ctx_replace = bw + replacement
+                if len(ctx_find) >= max(8, len(marked) + 4) and ctx_find != fb_find:
+                    fb2_find = ctx_find
+                    fb2_replace = ctx_replace
+            elif bw or aw:
+                ctx_find = (bw + " " if bw else "") + marked + (" " + aw if aw else "")
+                ctx_replace = (bw + " " if bw else "") + replacement + (" " + aw if aw else "")
+                if len(ctx_find) >= max(8, len(marked) + 4) and ctx_find != fb_find:
+                    fb2_find = ctx_find
+                    fb2_replace = ctx_replace
+    return fb_find, fb_replace, fb2_find, fb2_replace
+
+
 def _human_review(content, rationale):
     return {
         "op": "HUMAN_REVIEW",
@@ -1158,6 +1584,16 @@ def _pair_strikethroughs_with_comments(annotations, max_y_pt=15.0, max_x_pt=200.
             return None
         return ((rect[0] + rect[2]) / 2, (rect[1] + rect[3]) / 2)
 
+    def _point_to_rect_offsets(px, py, rect):
+        # (dx, dy) from a point to the nearest edge of the rect; (0, 0) if
+        # the point is inside. Used so a tall multi-line strike (whose
+        # bounding rect spans both lines and centers between them) doesn't
+        # blow past the dx threshold when the comment sits at one end.
+        x0, y0, x1, y1 = rect[0], rect[1], rect[2], rect[3]
+        dx = max(x0 - px, 0.0, px - x1)
+        dy = max(y0 - py, 0.0, py - y1)
+        return dx, dy
+
     # Comments that look like directional / instructional human notes
     # ("If it fits...", "See note about...", "Move this above...") are NOT
     # meant to be inserted as replacement text — they're guidance for the
@@ -1188,11 +1624,24 @@ def _pair_strikethroughs_with_comments(annotations, max_y_pt=15.0, max_x_pt=200.
             continue  # guidance, not replacement — leave for the main loop
         comments_by_page.setdefault(a.get("page"), []).append((i, a))
 
-    for stk in annotations:
-        if stk.get("type") != "StrikeOut":
-            continue
-        c1 = _center(stk.get("rect"))
-        if not c1:
+    # Process strikethroughs in TWO passes so longer-marked strikes claim
+    # comments first. Without this, a punctuation-only strike (e.g. ".")
+    # sitting right next to a meaty strike ("whole home assessment") on the
+    # same line could steal the reviewer's replacement comment, leaving the
+    # meaty edit as a silent delete.
+    def _strike_priority(s):
+        m = (s.get("marked_text") or "").strip()
+        # Trivial = single-char punctuation. Those should pair LAST.
+        is_trivial = len(m) <= 2 and not any(ch.isalnum() for ch in m)
+        return 0 if is_trivial else 1   # 1 = priority pass, 0 = fallback pass
+    ordered_strikes = sorted(
+        [a for a in annotations if a.get("type") == "StrikeOut"],
+        key=lambda s: -_strike_priority(s)  # priority 1 first
+    )
+
+    for stk in ordered_strikes:
+        rect = stk.get("rect")
+        if not rect or len(rect) < 4:
             continue
         candidates = comments_by_page.get(stk.get("page"), [])
         best = None
@@ -1203,10 +1652,15 @@ def _pair_strikethroughs_with_comments(annotations, max_y_pt=15.0, max_x_pt=200.
             c2 = _center(comment.get("rect"))
             if not c2:
                 continue
-            dy = abs(c1[1] - c2[1])
-            dx = abs(c1[0] - c2[0])
-            # STRICT: must be on the same visual line as the strikethrough.
-            # Comments above/below count as separate intent.
+            # Distance from the comment center to the nearest edge of the
+            # strike rect (0 if the comment sits inside the rect). Using
+            # point-to-rect rather than center-to-center matters when a
+            # strike spans a line break — its bounding rect is wide and
+            # centers between the two lines, so the actual marked text
+            # ("three" at the end of line 1, "month" at the start of line 2)
+            # can be 200+pt from the rect's centroid even though the caret
+            # comment sits right on top of one of the marked words.
+            dx, dy = _point_to_rect_offsets(c2[0], c2[1], rect)
             if dy > max_y_pt or dx > max_x_pt:
                 continue
             d = (dx * dx + dy * dy) ** 0.5
@@ -1221,6 +1675,20 @@ def _pair_strikethroughs_with_comments(annotations, max_y_pt=15.0, max_x_pt=200.
             # single-letter case fixes ("strikeout 'p' + comment 'P'") when
             # the line has multiple matching letters.
             stk["paired_nearby_text"] = (comment.get("nearby_text") or "").strip()
+            # Multi-line strikes only carry the FIRST line in their
+            # `line_text` (reconstruction is centered on the rect midpoint,
+            # which lands between the two lines). When the marked text isn't
+            # contained in the strike's line_text, splice in the comment's
+            # line_text so the line-scoped REPLACE_TEXT path can build a
+            # proper find/replace string covering both lines.
+            stk_marked = (stk.get("marked_text") or "").strip()
+            stk_line = (stk.get("line_text") or "").strip()
+            cmt_line = (comment.get("line_text") or "").strip()
+            if (stk_marked and stk_line and cmt_line and
+                    stk_line != cmt_line and stk_marked not in stk_line):
+                combined = (stk_line + " " + cmt_line).strip()
+                if stk_marked in combined:
+                    stk["line_text"] = combined
             skip_indices.add(i)
     return skip_indices
 
@@ -1280,14 +1748,25 @@ def _merge_same_line_replace_edits(edits):
             confs.append(e.get("confidence", 0) or 0)
             sources.append(e.get("source_annotation", "") or "")
         running = re.sub(r"\s{2,}", " ", running).strip()
-        merged.append({
+        merged_edit = {
             "op": "REPLACE_TEXT",
             "target": {"find": find},
             "params": {"replace_with": running},
             "confidence": min(confs) if confs else 0.85,
             "rationale": " + ".join(r for r in rationales if r) or "Merged line edits",
             "source_annotation": " | ".join(s for s in sources if s),
-        })
+        }
+        # Preserve fallback fields from the LONGEST-marked edit (most
+        # likely to be the primary substitution; short companions are
+        # usually period-deletes that don't have or need a fallback).
+        primary = group[0]
+        for fb_key in ("fallback_find", "fallback2_find"):
+            if primary.get("target", {}).get(fb_key):
+                merged_edit["target"][fb_key] = primary["target"][fb_key]
+        for fb_key in ("fallback_replace_with", "fallback2_replace_with"):
+            if primary.get("params", {}).get(fb_key):
+                merged_edit["params"][fb_key] = primary["params"][fb_key]
+        merged.append(merged_edit)
     return passthrough + merged
 
 

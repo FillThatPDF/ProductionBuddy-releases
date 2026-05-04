@@ -240,6 +240,29 @@ Existing installs will detect the new version on next launch (electron-updater p
 - `cd InDesignEditor && rm -rf node_modules package-lock.json && npm install --no-audit --no-fund`
 - The `postinstall` script runs `electron-builder install-app-deps`, which is sometimes flaky on the first install — rerun if it errors.
 
+### node_modules/.bin/ entries are regular files instead of symlinks
+- Symptom: `electron-builder` fails with `Cannot find module './out/cli/cli'`.
+- Cause: `node_modules` was copied with a tool that dereferences symlinks (e.g. `cp -L`, some Finder copies, or rsync with the wrong flags). Once that happens it propagates forward through every subsequent copy.
+- Fix: `rm -rf node_modules && npm install --ignore-scripts` (npm rebuilds the symlinks correctly). The `--ignore-scripts` flag avoids the `electron-builder install-app-deps` post-install if it's flaky.
+- Verify: `ls -la node_modules/.bin/electron-builder` should show `→ ../electron-builder/cli.js`, not a regular file.
+
+### `pyenv/` was copied from another version and shebangs point to a stale path
+- Symptom: `dyld: Library not loaded` when running anything in `pyenv/bin/`, or `pyenv/bin/pyinstaller` exec-fails with "No such file or directory".
+- Cause: venvs hardcode the absolute path of the Python interpreter at creation time. Copying `pyenv/` between version folders (e.g. via rsync) carries the original path forward — when that original location stops existing, every binary in the venv breaks.
+- Fix: recreate from system Python (do NOT copy `pyenv/` from an old version):
+  ```bash
+  cd "/Users/36981/Desktop/Prdouction AI/InDesignEditor-${NEW_VER}"
+  rm -rf pyenv
+  python3 -m venv pyenv
+  ./pyenv/bin/python3 -m pip install --upgrade pip
+  ./pyenv/bin/python3 -m pip install pyinstaller pikepdf pdfplumber pdfminer.six pypdfium2 Pillow pyspellchecker
+  ```
+  Verify: `./pyenv/bin/python3 -c "import pikepdf, pdfplumber, pypdfium2, PIL"` runs clean.
+
+### Verify the signing identity exists before building
+- The `mac.identity` SHA in `package.json` must match a cert in the Login keychain. If the cert was reinstalled the SHA changes and electron-builder skips signing with `Identity name is specified, but no valid identity with this name in the keychain`.
+- Check: `security find-identity -v -p codesigning | grep "Developer ID Application"` — confirm the SHA matches `package.json`. If it doesn't, either update `package.json` to the new SHA or re-import the previous cert from a backup `.p12`.
+
 ---
 
 ## One-time setup (already done on this machine)

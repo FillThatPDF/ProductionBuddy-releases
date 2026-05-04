@@ -74,8 +74,116 @@ sys.path.insert(0, str(HERE))
 from engines import get_engine  # noqa: E402
 
 
+class _StepTimer:
+    """Auto-tracks per-step timings by sniffing the standard "step N:" log
+    lines. Each new "step ..." line closes out the previous step. Output:
+      - inline `← step N: <label> done in X.YYs` line after each step
+      - a sorted-by-duration summary at the end of the run
+      - a JSON file at `<work_dir>/timings.json`
+
+    Negligible runtime overhead (~1µs per log call), always on.
+    """
+    _STEP_RE = re.compile(r"^\[orchestrate\] (step [\d.a-z]+:.*?)…?\s*$",
+                          re.IGNORECASE)
+
+    def __init__(self):
+        self._t_run_start = time.perf_counter()
+        self._t_step_start = None
+        self._step_label = None
+        self.steps = []  # [{label, elapsed_s}]
+
+    def maybe_mark(self, msg):
+        m = self._STEP_RE.match(msg)
+        if not m:
+            return None
+        return self._begin(m.group(1).strip())
+
+    def _begin(self, label):
+        closeout = self._close_current()
+        self._step_label = label
+        self._t_step_start = time.perf_counter()
+        return closeout  # log line to emit for the just-closed prev step
+
+    def _close_current(self):
+        if self._step_label is None:
+            return None
+        elapsed = time.perf_counter() - self._t_step_start
+        self.steps.append({"label": self._step_label, "elapsed_s": round(elapsed, 3)})
+        line = f"[orchestrate]   ← {self._step_label} done in {elapsed:.2f}s"
+        self._step_label = None
+        self._t_step_start = None
+        return line
+
+    def finalize(self, work_dir=None):
+        # Close the last step (if a step is still open)
+        closeout = self._close_current()
+        if closeout:
+            print(closeout, flush=True)
+            _tee(closeout)
+
+        total = time.perf_counter() - self._t_run_start
+        sorted_steps = sorted(self.steps, key=lambda s: -s["elapsed_s"])
+        header = f"[orchestrate] === TIMING SUMMARY === total: {total:.2f}s"
+        print(header, flush=True); _tee(header)
+        for s in sorted_steps:
+            pct = (100 * s["elapsed_s"] / total) if total > 0 else 0
+            line = f"[orchestrate]   {s['elapsed_s']:>7.2f}s ({pct:>5.1f}%)  {s['label']}"
+            print(line, flush=True); _tee(line)
+
+        if work_dir is not None:
+            try:
+                Path(work_dir).mkdir(parents=True, exist_ok=True)
+                (Path(work_dir) / "timings.json").write_text(json.dumps({
+                    "total_s": round(total, 3),
+                    "steps": self.steps,
+                }, indent=2))
+            except Exception:
+                pass
+
+
+_timer = _StepTimer()
+# Captured by _emit_work_dir() so the timing finalizer knows where to write
+# timings.json. Each main_* function calls _emit_work_dir() exactly once.
+_LAST_WORK_DIR = None
+
+
+def _emit_work_dir(work_dir):
+    """Emit the stdout marker main.js parses, AND capture for the timer."""
+    global _LAST_WORK_DIR
+    _LAST_WORK_DIR = str(work_dir)
+    print(f"[work_dir] {work_dir}", flush=True)
+
+
+# Tee log lines to a fixed file so external observers (debug terminals,
+# `tail -f`, the timing-investigation Monitor) can watch a run in real time.
+# Truncated at the start of each run, written in append mode after that.
+_TEE_PATH = "/tmp/pb_orchestrate.log"
+try:
+    Path(_TEE_PATH).write_text(
+        f"--- pb run started {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n"
+    )
+except Exception:
+    pass
+
+
+def _tee(line):
+    try:
+        with open(_TEE_PATH, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
+
+
 def log(msg):
-    print(msg, flush=True)
+    msg_str = str(msg)
+    # Mark step boundaries automatically. Emits a "← prev step done in Xs"
+    # line BEFORE the new "step N:" line so step transitions are obvious.
+    closeout = _timer.maybe_mark(msg_str)
+    if closeout:
+        print(closeout, flush=True)
+        _tee(closeout)
+    print(msg_str, flush=True)
+    _tee(msg_str)
 
 
 def bump_version(base_name):
@@ -157,43 +265,197 @@ def _strip_leading_bullet(text):
     return re.sub(r"^\s*[•‣◦⁃∙·●–—\-\*]+\s*", "", text).strip()
 
 
+def _refine_annotations_with_cell_geometry(annotations, doc_inspection, pdf_path):
+    """For annotations that fall inside a table cell, re-clip `line_text` to
+    only the words within that single cell's x-range. The default extraction
+    uses a fixed 40pt x-gap heuristic to detect cell boundaries, which fails
+    on tables whose cells abut closely (rebate tables, form grids).
+
+    Reads per-table `columnEdges` written by inspect_doc.jsx (in spread
+    coordinates — for single-page spreads this matches the PDF's top-left
+    origin x). For each annotation falling inside a table, re-runs
+    `_line_text_around` with `x_clip` set to the cell's column edges so
+    only words inside that cell contribute to the line.
+    """
+    # Build a per-page list of {column_edges, frame_bounds} entries
+    page_tables = {}
+    for p in (doc_inspection.get("pages") or []):
+        page_num = p.get("page")
+        on_page = []
+        for fr in (p.get("frames") or []):
+            fb = fr.get("bounds") or []  # [y1, x1, y2, x2] in spread coords
+            for tbl in (fr.get("tables") or []):
+                edges = tbl.get("columnEdges") or []
+                if len(edges) >= 2:
+                    on_page.append({"edges": edges, "frame_bounds": fb})
+        if on_page:
+            page_tables[page_num] = on_page
+    if not page_tables:
+        return  # no tables anywhere — refinement is a no-op
+
+    from pdf_text import PdfTextExtractor
+    text = PdfTextExtractor(pdf_path)
+    refined = 0
+    for ann in annotations:
+        page_num = ann.get("page")
+        if page_num not in page_tables:
+            continue
+        rect = ann.get("rect") or []
+        if len(rect) < 4:
+            continue
+        cx = (rect[0] + rect[2]) / 2
+        cy = (rect[1] + rect[3]) / 2
+        # Pick the table whose column range contains cx (and ideally whose
+        # frame_bounds vertical range contains cy, but X is the discriminator
+        # we care about for cell clipping).
+        cell_x0 = cell_x1 = None
+        for tbl in page_tables[page_num]:
+            edges = tbl["edges"]
+            fb = tbl["frame_bounds"]
+            if fb and len(fb) >= 4:
+                # frame_bounds is [y1, x1, y2, x2] (top-left origin)
+                if not (fb[0] <= cy <= fb[2]):
+                    continue
+            if cx < edges[0] or cx > edges[-1]:
+                continue
+            # Find the column the cx falls into
+            for ci in range(len(edges) - 1):
+                if edges[ci] <= cx <= edges[ci + 1]:
+                    cell_x0 = edges[ci]
+                    cell_x1 = edges[ci + 1]
+                    break
+            if cell_x0 is not None:
+                break
+        if cell_x0 is None:
+            continue  # not in any cell
+
+        # Re-extract line_text using the cell's x-range as the clip
+        try:
+            words = text.get_words(page_num - 1)
+        except Exception:
+            continue
+        new_line = _line_text_around(words, cx, cy, x_clip=(cell_x0, cell_x1))
+        if new_line and new_line != ann.get("line_text"):
+            ann["line_text"] = new_line
+            refined += 1
+    return refined
+
+
 def _line_text_around(words, cx, cy, line_height_band=14, baseline_tol=2,
-                      cell_x_gap=40):
+                      cell_x_gap=40, x_clip=None):
     """Reconstruct the visual line of text containing the point (cx, cy).
     Used by markup annotations (StrikeOut/Highlight/etc.) so the classifier
     has surrounding context for scoped replacements — without this, a
     strikethrough on "3" or "Up" would trigger a global delete across the
     whole doc.
 
-    Two-pass selection mirrors the sticky-note logic: loose y-band first to
-    pick up nearby words, then a tight baseline filter to avoid bleeding
-    into the next/previous visual line.
+    Words emitted by `PdfTextExtractor.get_words` carry a `line_id`, so the
+    line membership lookup is a dict slice instead of the two-pass y-band
+    clustering this used to run inline.
 
-    Cross-cell guard: after reconstructing the candidate line, split on any
-    horizontal x-gap larger than `cell_x_gap` between adjacent words. PDF
-    table cells usually sit ≥ 40pt apart, so a big gap means we crossed a
-    column boundary. We then keep only the chunk that contains the point
-    (cx, cy).
+    Cross-cell guard: split the chosen line on any horizontal x-gap larger
+    than `cell_x_gap` between adjacent words. PDF table cells usually sit
+    ≥ 40pt apart, so a big gap means we crossed a column boundary. Keep
+    only the chunk that contains the seed point (cx, cy).
+
+    `baseline_tol` is retained for callers that pass it but is unused here
+    — line membership is now decided once, at extraction time.
     """
     if not words:
         return None
-    # Loose first pass — words within line_height_band of the y center
+    # Group by line_id (assigned by pdf_text._assign_line_ids). Falls back
+    # to the legacy per-word y-band scan if line_ids aren't present (e.g.
+    # a caller built `words` by hand).
+    if "line_id" not in words[0]:
+        return _line_text_around_legacy(words, cx, cy, line_height_band,
+                                        baseline_tol, cell_x_gap, x_clip)
+    by_line = {}
+    for w in words:
+        by_line.setdefault(w["line_id"], []).append(w)
+    # Pick the line whose center y is closest to cy. Using center rather
+    # than y-range containment matters because tall glyphs (bullets,
+    # symbols rendered with extra leading) can have a y-range that
+    # swallows a regular text line's cy — selecting the bullet line
+    # alone yields a one-glyph "line" that strips to empty.
+    best_words = None
+    best_dist = float("inf")
+    for ws in by_line.values():
+        y_min = min(w["y0"] for w in ws)
+        y_max = max(w["y1"] for w in ws)
+        d = abs(cy - (y_min + y_max) / 2)
+        if d > line_height_band:
+            continue
+        if d < best_dist:
+            best_dist = d
+            best_words = ws
+    if not best_words:
+        return None
+    # PyMuPDF places adjacent table cells in DIFFERENT blocks (and thus
+    # different line_ids) even when they sit on the same visual y
+    # baseline. Merge in same-baseline words from other lines so the
+    # cell-gap split below sees the full visual line — without this
+    # step, a strike in the right column of a 2-column row only gets
+    # the right cell's words as line_text, even when the left cell's
+    # text is needed for disambiguation (e.g. paired_nearby anchors).
+    pick_y0 = min(w["y0"] for w in best_words)
+    extras = []
+    for lid, ws in by_line.items():
+        if ws is best_words:
+            continue
+        for w in ws:
+            if abs(w["y0"] - pick_y0) <= baseline_tol:
+                extras.append(w)
+    if extras:
+        best_words = list(best_words) + extras
+    # Apply x_clip (table cell mode) — only words whose center x falls
+    # within the cell's column edges, with a small tolerance for
+    # ascenders / punctuation that overhang the cell boundary.
+    if x_clip is not None:
+        cell_x0, cell_x1 = x_clip
+        best_words = [w for w in best_words
+                      if cell_x0 - 2 <= (w["x0"] + w["x1"]) / 2 <= cell_x1 + 2]
+        if not best_words:
+            return None
+    best_words = sorted(best_words, key=lambda w: w["x0"])
+    # Cell-gap split: a big horizontal gap between adjacent words means we
+    # crossed a column boundary. Keep the chunk containing the word
+    # closest to the cx anchor.
+    seed = min(best_words, key=lambda w: abs((w["x0"] + w["x1"]) / 2 - cx))
+    chunks = [[]]
+    for w in best_words:
+        if chunks[-1] and (w["x0"] - chunks[-1][-1]["x1"]) > cell_x_gap:
+            chunks.append([])
+        chunks[-1].append(w)
+    seed_chunk = chunks[0]
+    for chunk in chunks:
+        if any(w is seed for w in chunk):
+            seed_chunk = chunk
+            break
+    line_text = " ".join(w["text"] for w in seed_chunk).strip()
+    return _strip_leading_bullet(line_text)
+
+
+def _line_text_around_legacy(words, cx, cy, line_height_band=14,
+                             baseline_tol=2, cell_x_gap=40, x_clip=None):
+    """Fallback used when caller passed words without `line_id` set."""
     candidates = []
     for w in words:
         wcy = (w["y0"] + w["y1"]) / 2
-        if abs(wcy - cy) <= line_height_band:
-            candidates.append(w)
+        if abs(wcy - cy) > line_height_band:
+            continue
+        if x_clip is not None:
+            cell_x0, cell_x1 = x_clip
+            wcx = (w["x0"] + w["x1"]) / 2
+            if wcx < cell_x0 - 2 or wcx > cell_x1 + 2:
+                continue
+        candidates.append(w)
     if not candidates:
         return None
-    # Pick the closest word to (cx, cy) as the seed
     candidates.sort(key=lambda w: (w["y0"] - cy) ** 2 + ((w["x0"] + w["x1"]) / 2 - cx) ** 2)
     seed = candidates[0]
     seed_y0 = seed["y0"]
-    # Tight second pass — only words on the same baseline as the seed
     line_words = [w for w in candidates if abs(w["y0"] - seed_y0) <= baseline_tol]
     line_words.sort(key=lambda w: w["x0"])
-    # Split on big horizontal gaps (= column boundaries in tables) and keep
-    # only the chunk that contains the seed point.
     chunks = [[]]
     for w in line_words:
         if chunks[-1] and (w["x0"] - chunks[-1][-1]["x1"]) > cell_x_gap:
@@ -220,36 +482,28 @@ def extract_annotations(pdf_path):
       nearby_text_rect  — bbox of that text in the PDF
       line_text         — full line containing the nearby text
     """
-    import pikepdf
+    import fitz  # PyMuPDF — primary engine in 1.0.8
     from pdf_text import PdfTextExtractor
 
     annotations = []
 
-    # PDF Subtype names → simplified type labels (matches the strings the
-    # rule-based classifier expects).
-    _SUBTYPE_MAP = {
-        "/Text":      "Text",
-        "/StrikeOut": "StrikeOut",
-        "/Underline": "Underline",
-        "/Squiggly":  "Squiggly",
-        "/Highlight": "Highlight",
-        "/FreeText":  "FreeText",
-        "/Caret":     "Caret",
-    }
+    # PyMuPDF annotation type names (already match the strings the rule-
+    # based classifier expects, no pikepdf "/Subtype" prefix to strip).
     MARKUP_TYPES = ("StrikeOut", "Underline", "Squiggly", "Highlight")
+    KNOWN_TYPES = MARKUP_TYPES + ("Text", "FreeText", "Caret")
 
-    pdf = pikepdf.open(pdf_path)
+    doc = fitz.open(pdf_path)
     text = PdfTextExtractor(pdf_path)
     try:
-        for page_idx, page in enumerate(pdf.pages):
-            # PDF page MediaBox height (for y-axis flipping into top-left coords)
-            try:
-                mbox = page.MediaBox
-                page_h = float(mbox[3]) - float(mbox[1])
-            except Exception:
-                page_h = text.page_height(page_idx)
+        for page_idx in range(doc.page_count):
+            page = doc[page_idx]
+            # PyMuPDF gives us annot rects + vertices in top-left origin
+            # already, so no MediaBox-height-based y-flipping like 1.0.7
+            # had to do. The rect/sub_rect coords feed the classifier in
+            # the same coordinate system as `words` from the extractor.
 
-            # Pre-fetch all words on the page in two modes:
+            # Pre-fetch all words on the page in two modes (same contract
+            # as 1.0.7 — only the underlying engine changed):
             #   - words: hyphenated tokens stay merged ("High-bay") — used
             #     for line_text reconstruction so the find string matches
             #     the original InDesign character sequence.
@@ -259,37 +513,46 @@ def extract_annotations(pdf_path):
             words = text.get_words(page_idx)
             words_split = text.get_words(page_idx, split_punctuation=True)
 
-            annots = page.get("/Annots", [])
-            for a in annots:
-                # pikepdf auto-resolves indirect refs on attribute access
+            for annot in page.annots() or ():
+                # PyMuPDF: .type → (int, "TypeName"); .info → dict with
+                # 'content'/'title'/'subject'; .rect → fitz.Rect (top-
+                # left); .vertices → flat list of (x,y) points, 4 per
+                # quad for markup annotations, in top-left coords.
                 try:
-                    subtype = str(a.get("/Subtype", ""))
+                    atype = annot.type[1] if annot.type else ""
                 except Exception:
                     continue
-                atype = _SUBTYPE_MAP.get(subtype, subtype.lstrip("/"))
-                # Contents (for sticky notes / FreeText). pikepdf returns
-                # pikepdf.String — coerce to str.
-                content = ""
+                if atype not in KNOWN_TYPES:
+                    continue
                 try:
-                    raw = a.get("/Contents", "")
-                    content = str(raw).strip() if raw is not None else ""
+                    content = (annot.info.get("content") or "").strip()
                 except Exception:
                     content = ""
 
-                # Annotation rect (top-left origin)
-                r = _normalize_pdf_rect(a.get("/Rect", None), page_h)
-                if r is None:
-                    continue
-                rx0, ry0, rx1, ry1 = r
+                rect = annot.rect
+                rx0, ry0, rx1, ry1 = float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1)
+                # Defend against degenerate / inverted rects from third-
+                # party annotators.
+                if rx0 > rx1: rx0, rx1 = rx1, rx0
+                if ry0 > ry1: ry0, ry1 = ry1, ry0
+                r = (rx0, ry0, rx1, ry1)
 
                 # ---- Strikethrough / underline / highlight: extract underlying text ----
-                # These annotations carry /QuadPoints describing the exact regions
-                # of text the marker covers — multiple per annotation if the
-                # markup spans multiple lines. We extract text from each quad and
-                # concatenate; gives us the actual marked text, not the whole rect.
+                # PyMuPDF exposes /QuadPoints as `annot.vertices` — a flat
+                # list of (x, y) tuples already in top-left coords, four
+                # points per quad. One quad per visual line the markup
+                # covers; multi-line strikes give us multiple quads.
                 if atype in MARKUP_TYPES:
                     marked_text = ""
-                    sub_rects = _quad_rects_from_quadpoints(a.get("/QuadPoints", None), page_h)
+                    sub_rects = []
+                    verts = annot.vertices or []
+                    for q in range(0, len(verts), 4):
+                        quad = verts[q:q + 4]
+                        if len(quad) < 4:
+                            continue
+                        xs = [float(p[0]) for p in quad]
+                        ys = [float(p[1]) for p in quad]
+                        sub_rects.append((min(xs), min(ys), max(xs), max(ys)))
                     # Prefer word-level extraction with a 50% bbox-overlap
                     # rule. Two failure modes to balance:
                     #   - Center-inside-quad is too strict: a strike that
@@ -335,13 +598,27 @@ def extract_annotations(pdf_path):
                                         pieces.append(t)
                                 bits.append(" ".join(pieces))
                         marked_text = " ".join(bits).strip()
-                    # Fall back to pypdfium2's bounded text if no words landed
-                    # inside the quads (rare — happens with very narrow strike
+                    # Fall back to bounded text if no words landed inside
+                    # the quads (rare — happens with very narrow strike
                     # marks on punctuation).
                     if not marked_text and sub_rects:
                         bits = []
                         for sr in sub_rects:
                             t = text.get_text_in_rect(page_idx, sr).strip()
+                            if t:
+                                bits.append(t)
+                        marked_text = " ".join(bits).strip()
+                    # Char-level fallback for zero-width-glyph strikes:
+                    # PyMuPDF reports end-of-sentence periods/commas with
+                    # an x0==x1 text bbox in some fonts, so the glyph
+                    # falls outside both the word bbox AND the bounded-
+                    # text clip even though the strike's QuadPoint sits
+                    # squarely on its visible ink. Walk individual chars
+                    # and pick by bbox-center inclusion.
+                    if not marked_text and sub_rects:
+                        bits = []
+                        for sr in sub_rects:
+                            t = text.get_chars_in_rect(page_idx, sr).strip()
                             if t:
                                 bits.append(t)
                         marked_text = " ".join(bits).strip()
@@ -361,12 +638,89 @@ def extract_annotations(pdf_path):
                     # classifier context for scoped replacement when the
                     # marked text is too short to safely match globally
                     # (e.g. a strikethrough on "3" or "Up").
-                    sl_line_text = _line_text_around(words, (rx0 + rx1) / 2, (ry0 + ry1) / 2)
+                    #
+                    # Multi-line strikes (sub_rects span more than one
+                    # visual line): walk each sub-rect, pull its line,
+                    # and join them in reading order. Without this, a
+                    # strike on "three" + "month" across a soft-wrap
+                    # gets a `line_text` from the rect's centroid — which
+                    # lands between the two lines and arbitrarily picks
+                    # one. The joined version contains the marked text
+                    # contiguously so the classifier's line-scoped
+                    # REPLACE_TEXT path stays surgical.
+                    if len(sub_rects) > 1:
+                        seen_lines = set()
+                        line_chunks = []
+                        for sr in sub_rects:
+                            scx = (sr[0] + sr[2]) / 2
+                            scy = (sr[1] + sr[3]) / 2
+                            chunk = _line_text_around(words, scx, scy)
+                            if chunk and chunk not in seen_lines:
+                                seen_lines.add(chunk)
+                                line_chunks.append(chunk)
+                        sl_line_text = " ".join(line_chunks).strip() if line_chunks else None
+                    else:
+                        sl_line_text = _line_text_around(words, (rx0 + rx1) / 2, (ry0 + ry1) / 2)
+
+                    # Whitespace-only strike detection: if marked_text strips
+                    # empty and the strike is on a StrikeOut, the reviewer
+                    # likely struck a single redundant space character. The
+                    # standard text extractors normalize whitespace so we
+                    # never see the multi-space sequence on the line. Capture
+                    # surrounding context with a WIDER rect using PyMuPDF's
+                    # raw textbox API (which preserves spacing better) so the
+                    # classifier can emit a GREP collapsing 2+ whitespace at
+                    # the right spot.
+                    whitespace_strike_context = None
+                    if not marked_text and atype == "StrikeOut":
+                        try:
+                            ws_rect = fitz.Rect(rx0 - 30, ry0 - 1, rx1 + 30, ry1 + 1)
+                            ws_text = page.get_textbox(ws_rect) or ""
+                            # If there's a 2+ whitespace run inside the wider
+                            # text, capture the chars flanking it as anchors.
+                            m_ws = re.search(r"(\S+)\s{2,}(\S+)", ws_text)
+                            if m_ws:
+                                whitespace_strike_context = {
+                                    "before": m_ws.group(1),
+                                    "after": m_ws.group(2),
+                                    "raw": ws_text.strip(),
+                                }
+                                # Mark with a single-space placeholder so the
+                                # `if marked_text:` guard below admits the annotation.
+                                marked_text = " "
+                        except Exception:
+                            pass
+
+                    # Single-letter case-fix disambiguation: when marked_text
+                    # is one alpha char (e.g. 'w'), capture the FULL containing
+                    # word using the strike's rect-vs-words geometry. Without
+                    # this, classify_annotation can't tell which 'w' on the
+                    # line was struck (e.g. "straightforward" vs "when") if
+                    # the paired-comment's nearby text isn't on the same line.
+                    marked_word = None
+                    if (marked_text and len(marked_text) == 1
+                            and marked_text.isalpha() and atype == "StrikeOut"):
+                        cx_strike = (rx0 + rx1) / 2
+                        cy_strike = (ry0 + ry1) / 2
+                        for w in words:  # unsplit words → "when" stays whole
+                            if (w["x0"] - 1 <= cx_strike <= w["x1"] + 1 and
+                                    w["y0"] - 2 <= cy_strike <= w["y1"] + 2):
+                                marked_word = w["text"]
+                                break
 
                     if marked_text:
-                        annotations.append({
+                        ann_record = {
                             "page": page_idx + 1,
                             "rect": [round(x, 2) for x in r],
+                            # Per-line sub-rectangles from /QuadPoints (top-
+                            # left coords). One entry per visual line the
+                            # markup covers: a single-line strike has one
+                            # sub-rect, a strike spanning a soft-wrap has
+                            # two. Lets downstream code measure proximity
+                            # against the actual marked regions instead of
+                            # the wide bounding `rect`, and tells whether
+                            # the markup is multi-line at a glance.
+                            "sub_rects": [[round(x, 2) for x in sr] for sr in (sub_rects or [])],
                             "type": atype,
                             # Highlights/Underlines often carry an instruction
                             # in /Contents (e.g. "Lowercase", "Use a curly
@@ -377,7 +731,12 @@ def extract_annotations(pdf_path):
                             "nearby_text": None,
                             "nearby_rect": None,
                             "line_text": sl_line_text,
-                        })
+                        }
+                        if whitespace_strike_context:
+                            ann_record["whitespace_strike_context"] = whitespace_strike_context
+                        if marked_word:
+                            ann_record["marked_word"] = marked_word
+                        annotations.append(ann_record)
                     continue
 
                 if not content:
@@ -445,6 +804,26 @@ def extract_annotations(pdf_path):
                     # won't appear in the runs we find/replace against.
                     line_text = _strip_leading_bullet(line_text)
 
+                # Caret annotations sometimes live in table cells where the
+                # relevant target (e.g. a "$1000" amount the reviewer wants to
+                # format with a comma) is on a DIFFERENT line from the line
+                # the caret was visually drawn on. Capture a broader column-
+                # scoped context so rules like "comma-caret → format thousands"
+                # can find the target number even when it's not on the
+                # immediate baseline.
+                column_block_text = None
+                if atype == "Caret":
+                    col_x_low, col_x_high = cx - 150, cx + 150  # narrow cell width
+                    cy_low, cy_high = cy - 40, cy + 40           # ±2 lines
+                    block_words = []
+                    for w in words:
+                        wcy = (w["y0"] + w["y1"]) / 2
+                        if not (cy_low <= wcy <= cy_high): continue
+                        if w["x1"] < col_x_low or w["x0"] > col_x_high: continue
+                        block_words.append(w)
+                    block_words.sort(key=lambda w: (round(w["y0"], 1), w["x0"]))
+                    column_block_text = " ".join(w["text"] for w in block_words).strip()
+
                 annotations.append({
                     "page": page_idx + 1,
                     "rect": [round(x, 2) for x in r],
@@ -453,10 +832,11 @@ def extract_annotations(pdf_path):
                     "nearby_text": nearby_text,
                     "nearby_rect": nearby_rect,
                     "line_text": line_text,
+                    "column_block_text": column_block_text,
                 })
     finally:
         text.close()
-        pdf.close()
+        doc.close()
 
     return annotations
 
@@ -663,7 +1043,7 @@ def main_tag_template(payload):
     work_dir = get_work_dir(Path(output_path).parent, template_path,
                              settings.get("cacheRetention", DEFAULT_CACHE_RETENTION))
     log(f"[orchestrate] WORK: {work_dir}")
-    print(f"[work_dir] {work_dir}", flush=True)
+    _emit_work_dir(work_dir)
 
     # Step 1: get a CSV — either flatten the Excel files or use the one provided
     if not csv_path:
@@ -772,7 +1152,7 @@ def main_restructure_styles(payload):
     work_dir = get_work_dir(out_dir, indd_path,
                              settings.get("cacheRetention", DEFAULT_CACHE_RETENTION))
     log(f"[orchestrate] WORK: {work_dir}")
-    print(f"[work_dir] {work_dir}", flush=True)
+    _emit_work_dir(work_dir)
 
     log_path = work_dir / "restructure_log.txt"
     log_path.write_text("")
@@ -830,7 +1210,7 @@ def main_create_hyperlinks(payload):
     work_dir = get_work_dir(out_dir, indd_path,
                              settings.get("cacheRetention", DEFAULT_CACHE_RETENTION))
     log(f"[orchestrate] WORK: {work_dir}")
-    print(f"[work_dir] {work_dir}", flush=True)
+    _emit_work_dir(work_dir)
 
     log_path = work_dir / "create_hyperlinks_log.txt"
     log_path.write_text("")
@@ -900,7 +1280,7 @@ def main_data_merge(payload):
     work_dir = get_work_dir(output_dir, template_path,
                              settings.get("cacheRetention", DEFAULT_CACHE_RETENTION))
     log(f"[orchestrate] WORK: {work_dir}")
-    print(f"[work_dir] {work_dir}", flush=True)
+    _emit_work_dir(work_dir)
 
     # Step 1: get a CSV — either flatten Excel files or use the provided one
     md_path  = work_dir / "placeholders.md"
@@ -978,6 +1358,28 @@ def main():
     payload = json.loads(sys.argv[1])
     mode = payload.get("mode") or "markup"
 
+    try:
+        return _dispatch(payload, mode)
+    except BaseException as e:
+        # Tee the traceback so the timing investigator (watching /tmp/pb_orchestrate.log)
+        # can see what blew up. Also writes to stderr as before.
+        import traceback as _tb
+        tb_text = _tb.format_exc()
+        print(tb_text, file=sys.stderr, flush=True)
+        try:
+            _tee("[orchestrate] !!! EXCEPTION !!!")
+            for line in tb_text.rstrip().splitlines():
+                _tee(line)
+        except Exception:
+            pass
+        raise
+    finally:
+        # Always emit timing summary, even on error — that's when timing data
+        # is most useful (which step blew up?).
+        _timer.finalize(_LAST_WORK_DIR)
+
+
+def _dispatch(payload, mode):
     # Mode dispatch — the original "markup" mode handles PDF-annotation →
     # InDesign edits. The "data_merge" mode is a separate pipeline: takes a
     # tagged template + Excel files, produces one .indd per data record.
@@ -995,6 +1397,17 @@ def main():
     output_dir = payload["outputDir"]
     ref_files = payload.get("refFiles", []) or []
     settings = payload.get("settings") or {}
+
+    # Pre-warm Ollama in a background thread so the model is loaded by the
+    # time step 3b runs (~2s into the pipeline). Saves ~5s of cold-load
+    # `load_duration` on the first Ollama call. Fire-and-forget — silently
+    # no-ops if Ollama isn't running or the model isn't pulled.
+    if settings.get("useOllama", True):
+        try:
+            from ollama_client import warmup as _ollama_warmup
+            _ollama_warmup()
+        except Exception:
+            pass
 
     # Pick the engine based on the source file extension.
     engine = get_engine(indd_path)
@@ -1015,7 +1428,7 @@ def main():
     # knows where to read findings/result from.
     work_dir = get_work_dir(output_dir, indd_path, settings.get("cacheRetention", DEFAULT_CACHE_RETENTION))
     log(f"[orchestrate] WORK: {work_dir}")
-    print(f"[work_dir] {work_dir}", flush=True)  # stdout marker for main.js
+    _emit_work_dir(work_dir)
     if settings.get("run508Check"):
         log("[orchestrate] 508 compliance check: ENABLED")
 
@@ -1064,6 +1477,17 @@ def main():
             f"{len(doc_inspection.get('hyperlinks', []))} hyperlink(s)")
     except Exception as e:
         log(f"[orchestrate]   inspection JSON parse failed: {e}")
+
+    # Refine annotations using cell geometry: for any annotation falling
+    # inside a table cell, re-clip its line_text to that single cell's
+    # x-range. Replaces the brittle "40pt x-gap" cell-boundary heuristic
+    # with InDesign's own cell column widths.
+    try:
+        refined = _refine_annotations_with_cell_geometry(annotations, doc_inspection, pdf_path)
+        if refined:
+            log(f"[orchestrate]   refined {refined} annotation line_text(s) using cell geometry")
+    except Exception as e:
+        log(f"[orchestrate]   line_text refinement skipped: {e}")
 
     # 3.5: Auto-discover reference files in the source folder if the annotations
     # reference a file ID (4-6 digit) that exists locally and the user didn't
@@ -1120,6 +1544,17 @@ def main():
     if proc.returncode != 0:
         log(f"[orchestrate] apply step failed: {proc.stderr}")
         sys.exit(proc.returncode)
+
+    # Forward the JSX's sub-step timing breakdown so it shows up in our
+    # tee log alongside the top-level summary. Lets us see where step 4's
+    # seconds went (open doc / apply edits / canon / QA / 508 / save+export).
+    try:
+        if Path(log_path).exists():
+            for line in Path(log_path).read_text(errors="replace").splitlines():
+                if "[jsx-timing]" in line:
+                    log("[orchestrate]   " + line.strip())
+    except Exception:
+        pass
 
     # 5b. Scan apply_log.txt for ExtendScript errors that would otherwise be
     # silently swallowed by enclosing try/catch blocks (SyntaxError, ReferenceError,
@@ -1579,18 +2014,22 @@ def run_python_qa_checks(work_dir, deliverables_dir):
     findings = []
     sys.path.insert(0, str(HERE))
     for module_name in ["check_hyperlinks_reachability", "check_spelling", "check_link_recovery"]:
+        t0 = time.perf_counter()
         try:
             mod = __import__(f"qa_checks.{module_name}", fromlist=["run"])
             sig = _inspect.signature(mod.run)
             if len(sig.parameters) >= 2:
-                findings += mod.run(work_dir, deliverables_dir)
+                mod_findings = mod.run(work_dir, deliverables_dir)
             else:
                 # Legacy single-arg signature — pass work_dir; modules that
                 # need the PDF will fail gracefully.
-                findings += mod.run(work_dir)
-            log(f"[orchestrate]   {module_name}: ok")
+                mod_findings = mod.run(work_dir)
+            findings += mod_findings
+            dt = time.perf_counter() - t0
+            log(f"[orchestrate]   {module_name}: ok in {dt:.2f}s ({len(mod_findings)} finding(s))")
         except Exception as e:
-            log(f"[orchestrate]   {module_name}: failed ({e})")
+            dt = time.perf_counter() - t0
+            log(f"[orchestrate]   {module_name}: failed in {dt:.2f}s ({e})")
     return findings
 
 
