@@ -354,6 +354,20 @@
         for (var i = 0; i < allTables.length; i++) if (allTables[i].table === tbl) { modifiedTables[allTables[i].id] = true; return; }
     }
 
+    // Stories touched by REPLACE_TEXT, used by the post-edit reflow pass
+    // (3e) to find stale forced line breaks in just the modified bodies
+    // rather than rewriting the whole document.
+    var modifiedStories = {}; // story.id → story object
+    function noteChangedTexts(textArray) {
+        if (!textArray) return;
+        for (var ci = 0; ci < textArray.length; ci++) {
+            try {
+                var st = textArray[ci].parentStory;
+                if (st && st.id != null) modifiedStories[st.id] = st;
+            } catch (e) {}
+        }
+    }
+
     function applyEdit(edit) {
         L("\nEDIT [" + edit.op + "] confidence=" + (edit.confidence || "?") + " \u2014 " + (edit.rationale || ""));
         if (edit.op === "HUMAN_REVIEW") {
@@ -845,6 +859,89 @@
             return;
         }
 
+        if (op === "RELINK_IMAGE") {
+            // Re-points an existing placed graphic to a new asset file. Used
+            // when a reviewer annotation says "replace [X] logo/image with
+            // [filename]" — we want to swap the contents of the EXISTING
+            // frame, preserving its position/scale/transforms, not create
+            // a new frame.
+            //
+            //   target.name_match  — case-insensitive substring of the
+            //                        graphic's link name to match
+            //                        (e.g. "dabo" matches "DABO LOGO reversed.ai")
+            //   target.path_match  — optional alternate substring tried if
+            //                        name_match misses (matches against the
+            //                        full file path, useful when the link
+            //                        name is generic but the directory is
+            //                        distinctive)
+            //   target.page        — optional, scope to one page first
+            //                        (defaults to doc-wide)
+            //   params.new_file_path — absolute path of the replacement asset
+            var newPath = edit.params && edit.params.new_file_path;
+            var nameMatch = edit.target && edit.target.name_match;
+            var pathMatch = edit.target && edit.target.path_match;
+            var scopePage = edit.target && edit.target.page;
+            if (!newPath) { FLAG("RELINK_IMAGE: no new_file_path"); return; }
+            if (!nameMatch && !pathMatch) { FLAG("RELINK_IMAGE: no name_match or path_match"); return; }
+            try {
+                var newFile = File(newPath);
+                if (!newFile.exists) { FLAG("RELINK_IMAGE: replacement file not found: " + newPath); return; }
+                var nameLower = nameMatch ? String(nameMatch).toLowerCase() : null;
+                var pathLower = pathMatch ? String(pathMatch).toLowerCase() : null;
+                var graphics = doc.allGraphics;
+                var relinked = 0, candidates = 0;
+                // Two-pass: first the targeted page (if set), then doc-wide
+                // if no match on the targeted page. Lets the reviewer scope
+                // an ambiguous match by where they placed the sticky note,
+                // while still working when the same image lives on multiple
+                // pages and they only annotated one.
+                function tryRelink(restrictPage) {
+                    var hits = 0;
+                    for (var g = 0; g < graphics.length; g++) {
+                        var gr = graphics[g];
+                        var lnk = null;
+                        try { lnk = gr.itemLink; } catch (e) {}
+                        if (!lnk) continue;
+                        var nm = ""; var fp = "";
+                        try { nm = String(lnk.name || "").toLowerCase(); } catch (e) {}
+                        try { fp = String(lnk.filePath || "").toLowerCase(); } catch (e) {}
+                        var matched = false;
+                        if (nameLower && nm.indexOf(nameLower) >= 0) matched = true;
+                        else if (pathLower && fp.indexOf(pathLower) >= 0) matched = true;
+                        if (!matched) continue;
+                        candidates++;
+                        // Page scoping: walk up to the parent page if asked
+                        if (restrictPage) {
+                            var p = null;
+                            try { p = gr.parentPage; } catch (e) {}
+                            if (!p || p.documentOffset + 1 !== restrictPage) continue;
+                        }
+                        try {
+                            lnk.relink(newFile);
+                            try { lnk.update(); } catch (e) {}
+                            try { gr.fit(FitOptions.PROPORTIONALLY); } catch (e) {}
+                            hits++;
+                        } catch (e) {
+                            FLAG("RELINK_IMAGE relink failed for '" + nm + "': " + e);
+                        }
+                    }
+                    return hits;
+                }
+                if (scopePage) relinked = tryRelink(scopePage);
+                if (relinked === 0) relinked = tryRelink(null);
+                if (relinked > 0) {
+                    L("  relinked " + relinked + " graphic(s) matching '" +
+                      (nameMatch || pathMatch) + "' → " + newPath.split("/").pop());
+                } else {
+                    FLAG("RELINK_IMAGE: no placed graphic matched '" +
+                         (nameMatch || pathMatch) + "' (scanned " + graphics.length + " graphics)");
+                }
+            } catch (e) {
+                FLAG("RELINK_IMAGE failed for " + newPath + ": " + e);
+            }
+            return;
+        }
+
         if (op === "PLACE_ASSET_IN_FRAME") {
             var assetPath2 = edit.target && edit.target.file_path;
             if (!assetPath2) { FLAG("PLACE_ASSET_IN_FRAME: no file_path"); return; }
@@ -888,7 +985,9 @@
                 app.changeGrepPreferences = NothingEnum.NOTHING;
                 app.findGrepPreferences.findWhat = find;
                 app.changeGrepPreferences.changeTo = String(replace || "");
-                var hitsR = doc.changeGrep().length;
+                var hitsRArr = doc.changeGrep();
+                noteChangedTexts(hitsRArr);
+                var hitsR = hitsRArr.length;
                 L("  replaced " + hitsR + " occurrence(s) [regex] of \"" + find + "\"");
                 app.findGrepPreferences = NothingEnum.NOTHING;
                 app.changeGrepPreferences = NothingEnum.NOTHING;
@@ -897,7 +996,9 @@
                 app.changeTextPreferences = NothingEnum.NOTHING;
                 app.findTextPreferences.findWhat = find;
                 app.changeTextPreferences.changeTo = String(replace || "");
-                var hits = doc.changeText().length;
+                var hitsArr = doc.changeText();
+                noteChangedTexts(hitsArr);
+                var hits = hitsArr.length;
                 app.findTextPreferences = NothingEnum.NOTHING;
                 app.changeTextPreferences = NothingEnum.NOTHING;
                 if (hits > 0) {
@@ -952,7 +1053,11 @@
                     app.findGrepPreferences.findWhat = pattern;
                     app.changeGrepPreferences.changeTo = replaceTo;
                     var n = 0;
-                    try { n = doc.changeGrep().length; } catch (e) {}
+                    try {
+                        var arr = doc.changeGrep();
+                        noteChangedTexts(arr);
+                        n = arr.length;
+                    } catch (e) {}
                     app.findGrepPreferences = NothingEnum.NOTHING;
                     app.changeGrepPreferences = NothingEnum.NOTHING;
                     if (n > 0) L("  replaced " + n + " occurrence(s) of \"" + find + "\"" + (label ? " " + label : ""));
@@ -970,7 +1075,11 @@
                     app.findTextPreferences.findWhat = f;
                     app.changeTextPreferences.changeTo = r;
                     var n = 0;
-                    try { n = doc.changeText().length; } catch (e) {}
+                    try {
+                        var arr = doc.changeText();
+                        noteChangedTexts(arr);
+                        n = arr.length;
+                    } catch (e) {}
                     app.findTextPreferences = NothingEnum.NOTHING;
                     app.changeTextPreferences = NothingEnum.NOTHING;
                     if (n > 0) L("  replaced " + n + " occurrence(s) of \"" + find + "\"" + (label ? " " + label : ""));
@@ -1422,6 +1531,116 @@
         if (fixed > 0) L("  3d: extended " + fixed + " overflowing frame(s) to safe ceiling");
         if (failed.length > 0) FLAG(failed.length + " frame(s) still overflow after extension: " + failed.slice(0, 3).join(", "));
     }, "overflow extension");
+
+    // 3e: Stale line-break removal in modified stories
+    // ------------------------------------------------
+    // When body copy is replaced, designer-placed line breaks often
+    // end up wrong because the new text wraps differently. Common
+    // symptom: a short word stranded alone at the end of a line
+    // (e.g. "FREE") with a break before continuing lowercase text
+    // that would have fit on the previous line.
+    //
+    // Implementation uses findGrep/changeGrep scoped to each modified
+    // story rather than walking story.characters — InDesign's
+    // characters collection silently omits some break codepoints
+    // (e.g. raw U+000A line feeds from imported plain text), so the
+    // grep approach is the only one that reliably finds them.
+    //
+    // Two safety conditions baked into the regex:
+    //   (a) match must be followed by a lowercase letter — that
+    //       filters out new sentences, headings, and proper nouns.
+    //   (b) we don't touch hard paragraph breaks (\r) — merging
+    //       paragraphs can lose styling intent. Only U+2028 (forced
+    //       line break) and U+000A (LF) are merged.
+    //
+    // Safety net: if a story's text container overflows after the
+    // change, we replay the original break char back in.
+    safe(function () {
+        var storyCount = 0;
+        for (var _sid in modifiedStories) storyCount++;
+        if (storyCount === 0) {
+            L("  3e: no modified stories tracked, skipping stale-break pass");
+            return;
+        }
+        // GREP class: forced line break (~b == U+2028) OR U+000A LF.
+        // Using \x{...} hex escapes so InDesign's GREP can't quietly
+        // remap the metachars.
+        //
+        // Capture ONLY the last non-whitespace char before the break,
+        // then consume any whitespace on either side of it. Replacing
+        // with `$1 ` lands "FREE [SPACE][LF]energy" as "FREE energy" —
+        // a clean single space, no double-space leftover from the
+        // designer's trailing whitespace before the break.
+        var pattern = "(\\S)\\s*[\\x{000A}\\x{2028}]\\s*(?=[a-z])";
+        var replaceTo = "$1 ";
+        var totalChanged = 0, totalRestored = 0;
+        for (var sid in modifiedStories) {
+            var story = modifiedStories[sid];
+            if (!story || !story.isValid) continue;
+            // Snapshot the story's text BEFORE so we can replay if a
+            // frame overflows after.
+            var beforeContents = null;
+            try { beforeContents = story.contents; } catch (e) {}
+            var parentFrame = null;
+            try { parentFrame = story.textContainers[0]; } catch (e) {}
+            var overflowBefore = false;
+            try { if (parentFrame) overflowBefore = parentFrame.overflows; } catch (e) {}
+            app.findGrepPreferences = NothingEnum.NOTHING;
+            app.changeGrepPreferences = NothingEnum.NOTHING;
+            app.findGrepPreferences.findWhat = pattern;
+            app.changeGrepPreferences.changeTo = replaceTo;
+            var changed = [];
+            try { changed = story.changeGrep(); } catch (e) {}
+            app.findGrepPreferences = NothingEnum.NOTHING;
+            app.changeGrepPreferences = NothingEnum.NOTHING;
+            var n = changed.length;
+            if (n === 0) continue;
+            var overflowAfter = false;
+            try { if (parentFrame) overflowAfter = parentFrame.overflows; } catch (e) {}
+            if (!overflowBefore && overflowAfter && beforeContents !== null) {
+                // Replay original to restore — ExtendScript permits a
+                // bulk story.contents reassignment which is the
+                // simplest way to back out an unsafe change.
+                try { story.contents = beforeContents; } catch (e) {}
+                totalRestored += n;
+            } else {
+                totalChanged += n;
+            }
+        }
+        L("  3e: scanned " + storyCount + " modified stor(ies); reflowed " +
+          totalChanged + " line break(s), restored " + totalRestored + " (overflow)");
+    }, "3e stale-break removal");
+
+    // 3f: noBreak on email addresses and URLs (doc-wide, idempotent)
+    // ------------------------------------------------------------
+    // An email or URL split across two lines is always a layout bug.
+    // Apply InDesign's "No Break" character attribute to anything
+    // matching an email/URL shape — InDesign then refuses to break
+    // inside the run and either keeps it on its current line or moves
+    // the whole thing to the next. Doc-wide rather than scoped to
+    // modified stories because (a) the cost is negligible, (b) email
+    // formatting is universally desirable, (c) it's idempotent so
+    // re-runs are no-ops.
+    safe(function () {
+        function applyNoBreak(pattern, label) {
+            app.findGrepPreferences = NothingEnum.NOTHING;
+            app.changeGrepPreferences = NothingEnum.NOTHING;
+            app.findGrepPreferences.findWhat = pattern;
+            var found = [];
+            try { found = doc.findGrep(); } catch (e) {}
+            app.findGrepPreferences = NothingEnum.NOTHING;
+            var n = 0;
+            for (var i = 0; i < found.length; i++) {
+                try {
+                    if (!found[i].noBreak) { found[i].noBreak = true; n++; }
+                } catch (e) {}
+            }
+            if (n > 0) L("  3f: " + label + " — set noBreak on " + n + " run(s)");
+            return n;
+        }
+        applyNoBreak("[\\w._%+-]+@[\\w.-]+\\.[A-Za-z]{2,}", "emails");
+        applyNoBreak("https?://[\\S]+", "URLs");
+    }, "3f email/URL noBreak");
 
     // ==========================================================
     // STEP 4: COMPREHENSIVE QA SCAN

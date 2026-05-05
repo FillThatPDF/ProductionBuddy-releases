@@ -15,18 +15,31 @@
 # those need to be listed explicitly.
 import sys
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 
 # Where this spec file lives = python/ folder.
 HERE = Path(SPECPATH).resolve()  # noqa: F821 (SPECPATH injected by PyInstaller)
 
+# pyspellchecker ships its dictionaries as JSON.gz under
+# `spellchecker/resources/`. Plain hiddenimports doesn't bundle data files
+# — only Python modules. collect_all() pulls in submodules + data + binaries
+# so SpellChecker(language='en') can find its dictionary at runtime.
+spell_datas, spell_binaries, spell_hiddenimports = collect_all('spellchecker')
+
+# PyMuPDF (imported as `fitz`) ships its MuPDF C extension as a compiled
+# shared object plus support files. collect_all() pulls in the binaries,
+# data, and submodules so the bundle works without a system Python install.
+fitz_datas, fitz_binaries, fitz_hiddenimports = collect_all('fitz')
+pymupdf_datas, pymupdf_binaries, pymupdf_hiddenimports = collect_all('pymupdf')
+
 a = Analysis(
     ["orchestrate.py"],
     pathex=[str(HERE)],
-    binaries=[],
-    datas=[],
-    hiddenimports=[
+    binaries=spell_binaries + fitz_binaries + pymupdf_binaries,
+    datas=spell_datas + fitz_datas + pymupdf_datas,
+    hiddenimports=spell_hiddenimports + fitz_hiddenimports + pymupdf_hiddenimports + [
         # Engine plugins
         "engines",
         "engines.base",
@@ -41,14 +54,12 @@ a = Analysis(
         "font_activator",
         "local_classifier",
         "pdf_text",
-        # PDF stack: pikepdf for metadata, pypdfium2 for fast text extraction,
-        # pdfplumber as the fallback for stubborn PDFs. spellchecker has its
-        # own dictionary data — pyinstaller-hooks-contrib handles it.
-        "pikepdf",
-        "pypdfium2",
-        "pdfplumber",
-        "pdfminer",
-        "pdfminer.six",
+        # PDF stack: PyMuPDF (`fitz`) is the sole engine in 1.0.8+, used
+        # for word-level extraction with block/line indices and native
+        # annotation iteration. The collect_all() calls above already
+        # pulled in fitz/pymupdf binaries + data + submodules.
+        "fitz",
+        "pymupdf",
         "PIL",
         "spellchecker",
     ],
@@ -76,7 +87,7 @@ a = Analysis(
         "matplotlib", "seaborn",
         "numba", "llvmlite",
         "tensorflow", "keras", "jax", "jaxlib",
-        # Note: lxml + cryptography are transitive deps of pikepdf — keep them.
+        # Note: PyMuPDF ships its own MuPDF binary — no other native deps.
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

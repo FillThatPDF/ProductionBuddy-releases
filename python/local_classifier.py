@@ -1190,6 +1190,73 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
             notes.append("Layout note: " + content)
         return edits, notes
 
+    # ---- Pattern: asset relink — "replace [X] with [filename.ext]"
+    # Reviewer wants to swap the contents of an existing image frame, not
+    # the page text. Trigger when the comment matches a "replace X with Y"
+    # shape AND Y is the filename of a supplied reference file. We emit a
+    # RELINK_IMAGE edit that the JSX uses to find the placed graphic by
+    # name-substring (e.g. "dabo" matches "DABO LOGO reversed.ai") and
+    # re-point its link — preserving the existing frame's bounds, scale,
+    # and transforms. Tolerant of the common "Replce / Repalce" typo.
+    if reference_files:
+        m_relink = re.search(
+            r"(?:re?p[lac]+e|replce|swap(?:\s+out)?|change|update)\s+"
+            r"(?:the\s+)?([^,\.\n]{2,80}?)\s+"
+            r"(?:with|to|for|→|->)\s+"
+            r"(?:the\s+)?([\w\-\.\s]+?\.(?:psd|ai|eps|jpg|jpeg|png|tif|tiff|pdf|indd))\b",
+            content, re.I)
+        if m_relink:
+            target_phrase = m_relink.group(1).strip()
+            new_filename = m_relink.group(2).strip()
+            # Match the cited filename to a reference file (case-insensitive,
+            # accept either the full filename or a stem-only mention).
+            new_ref = None
+            new_filename_lc = new_filename.lower()
+            for rf in reference_files:
+                if rf.get("name", "").lower() == new_filename_lc:
+                    new_ref = rf; break
+            if not new_ref:
+                # Stem match (cited "ECN_Main_Logo_Color" against
+                # "ECN_Main_Logo_Color.psd")
+                stem = re.sub(r"\.[a-z0-9]{2,5}$", "", new_filename_lc)
+                for rf in reference_files:
+                    if rf.get("name", "").lower().startswith(stem + "."):
+                        new_ref = rf; break
+            if new_ref:
+                # Distill `target_phrase` to a short, distinctive substring
+                # to match against the existing graphic's link name. Strip
+                # generic noun suffixes like "logo", "image", "graphic" so
+                # "dabo logo" → "dabo" matches "DABO LOGO reversed.ai" via
+                # substring (the noun is usually in the link name already).
+                anchor = re.sub(
+                    r"\b(?:logo|image|graphic|photo|icon|picture|art|artwork|file)s?\b",
+                    "", target_phrase, flags=re.I).strip()
+                # Drop articles / leading filler
+                anchor = re.sub(r"^(?:the|a|an|this|that|current|old|existing)\s+",
+                                "", anchor, flags=re.I).strip()
+                # Take the most distinctive word (longest alphanumeric token)
+                tokens = re.findall(r"[A-Za-z0-9]{2,}", anchor)
+                if tokens:
+                    anchor = max(tokens, key=len)
+                if anchor and len(anchor) >= 2:
+                    # Doc-wide by default: a logo/image swap almost always
+                    # means "wherever this asset appears." If a reviewer
+                    # only wanted to swap one occurrence, they'd describe it
+                    # ("on the back" / "on page 2"); the rule-based path
+                    # doesn't try to honor that — let HUMAN_REVIEW handle
+                    # ambiguous scoping.
+                    edits.append({
+                        "op": "RELINK_IMAGE",
+                        "target": {"name_match": anchor},
+                        "params": {"new_file_path": new_ref["path"]},
+                        "confidence": 0.85,
+                        "rationale": (f"Matched 'replace {target_phrase} with "
+                                      f"{new_ref['name']}' → relink graphics "
+                                      f"matching '{anchor}' doc-wide"),
+                        "source_annotation": content[:200],
+                    })
+                    return edits, notes
+
     # ---- Pattern: "replace X with Y" / "change X to Y" → REPLACE_TEXT
     m = re.search(r"(?:replace|change|update)\s+[\"\'']?([^\"\'']{2,80})[\"\'']?\s+(?:with|to)\s+[\"\'']?([^\"\'']{1,80})[\"\'']?", content, re.I)
     if m:
@@ -1820,6 +1887,16 @@ def classify_edits_local(annotations, doc_inspection, reference_files=None):
             key_parts.append(str(target.get("column", "")))
             key_parts.append(str((e.get("params") or {}).get("text", "")))
             key_parts.append(str((e.get("params") or {}).get("values", "")))
+        elif op == "RELINK_IMAGE":
+            # Two annotations of the same swap (e.g. one sticky note per
+            # page asking to swap the same logo) collapse to one edit
+            # because the JSX walks the whole doc anyway. But two genuinely
+            # different relinks ("swap dabo for ECN" + "swap DTE for X")
+            # must stay distinct, so the key includes both the anchor
+            # we're matching against and the destination file.
+            key_parts.append(target.get("name_match", "") or "")
+            key_parts.append(target.get("path_match", "") or "")
+            key_parts.append((e.get("params") or {}).get("new_file_path", ""))
         key = tuple(key_parts)
         if key in seen: continue
         seen.add(key)
