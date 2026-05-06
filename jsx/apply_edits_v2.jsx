@@ -3521,7 +3521,30 @@
     safe(function () {
         var hyperlinks = doc.hyperlinks;
         if (hyperlinks.length === 0) return;
+        // Strict email regex: source text must be EXCLUSIVELY an email
+        // (no display label, no surrounding text). Used to gate the
+        // auto-fix below — when source text is unambiguously an email
+        // and the destination is a different mailto:, repointing is
+        // always correct.
+        var STRICT_EMAIL_RE = /^[a-z0-9._+\-]+@[a-z0-9\-]+(\.[a-z0-9\-]+)+$/i;
+        // Re-use an existing URLDestination if one already points at
+        // the right URL — adding a duplicate destination throws.
+        function findOrCreateMailtoDest(targetURL) {
+            try {
+                var dests = doc.hyperlinkURLDestinations;
+                for (var di = 0; di < dests.length; di++) {
+                    var existing = "";
+                    try { existing = String(dests[di].destinationURL); } catch (e) {}
+                    if (existing.toLowerCase() === targetURL.toLowerCase()) {
+                        return dests[di];
+                    }
+                }
+            } catch (e) {}
+            try { return doc.hyperlinkURLDestinations.add(targetURL); } catch (e) {}
+            return null;
+        }
         var mismatches = 0, urlList = [], samples = [];
+        var autoFixed = 0, autoFixSamples = [];
         for (var h = 0; h < hyperlinks.length; h++) {
             try {
                 var link = hyperlinks[h];
@@ -3529,15 +3552,54 @@
                 try { destURL = dest.destinationURL || ""; } catch (e) {}
                 var sourceText = "";
                 try { sourceText = link.source.sourceText.contents; } catch (e) {}
+                var srcStripped = String(sourceText).replace(/\s+/g, "");
+                var srcLooksLikeUrl = /^(https?:\/\/|www\.|[a-z0-9.-]+@[a-z0-9.-]+\.[a-z]+)/i.test(srcStripped);
+                var hasMismatch = srcLooksLikeUrl && destURL &&
+                    srcStripped.toLowerCase() !== destURL.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "");
+                if (hasMismatch) {
+                    // Auto-fix path: source text is a strict email AND
+                    // destination is a mailto: pointing at a different
+                    // address. Repoint to mailto:<source>.
+                    var destLc = String(destURL).toLowerCase();
+                    var isMailtoDest = destLc.indexOf("mailto:") === 0;
+                    if (isMailtoDest && STRICT_EMAIL_RE.test(srcStripped)) {
+                        // Decode the destination's email for comparison
+                        // (mailto: URLs sometimes encode @ as %40 and may
+                        // carry a ?subject= suffix).
+                        var destEmail = destLc.substring(7).split("?")[0].replace(/%40/g, "@");
+                        if (destEmail !== srcStripped.toLowerCase()) {
+                            var newURL = "mailto:" + srcStripped;
+                            var newDest = findOrCreateMailtoDest(newURL);
+                            if (newDest) {
+                                try {
+                                    link.destination = newDest;
+                                    autoFixed++;
+                                    if (autoFixSamples.length < 5) {
+                                        autoFixSamples.push("\"" + srcStripped + "\" was → " + destURL +
+                                                            ", now → " + newURL);
+                                    }
+                                    L("  HYPERLINK_AUTOFIX: \"" + srcStripped + "\" was → " +
+                                      destURL + ", now → " + newURL);
+                                    destURL = newURL;
+                                    hasMismatch = false;
+                                } catch (e) {
+                                    L("  HYPERLINK_AUTOFIX failed for \"" + srcStripped + "\": " + e);
+                                }
+                            }
+                        }
+                    }
+                }
                 urlList.push({ src: sourceText, dest: destURL });
-                var srcLooksLikeUrl = /^(https?:\/\/|www\.|[a-z0-9.-]+@[a-z0-9.-]+\.[a-z]+)/i.test(String(sourceText).replace(/\s+/g, ""));
-                if (srcLooksLikeUrl && destURL && String(sourceText).replace(/\s+/g, "").toLowerCase() !== destURL.toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "")) {
+                if (hasMismatch) {
                     mismatches++;
                     if (samples.length < 5) samples.push("\"" + String(sourceText).substring(0, 40) + "\" → " + destURL);
                 }
             } catch (e) {}
         }
         FINDING("info", "HYPERLINK_INVENTORY", "links", "doc", hyperlinks.length + " hyperlink(s)");
+        if (autoFixed > 0) FINDING("info", "HYPERLINK_AUTOFIXED", "links", "doc",
+            "auto-fixed " + autoFixed + " mailto: hyperlink(s) where displayed email didn't match destination: " +
+            autoFixSamples.join(" | "));
         if (mismatches > 0) FINDING("warning", "HYPERLINK_TEXT_MISMATCH", "links", "doc",
             mismatches + " hyperlink(s) where displayed URL doesn't match destination: " + samples.join(" | "), false, "Verify destination URL");
         try {
@@ -3564,8 +3626,14 @@
             try {
                 var link = doc.hyperlinks[h];
                 var src = link.source;
-                if (!src || !src.sourceText) continue;
-                var t = src.sourceText;
+                if (!src) continue;
+                // src.sourceText access can throw "Object does not support
+                // the property or method 'sourceText'" for non-text source
+                // types (HyperlinkPageItemSource, etc.). Probe via try/
+                // catch so the loop doesn't abort.
+                var t = null;
+                try { t = src.sourceText; } catch (e) { continue; }
+                if (!t) continue;
                 var sid;
                 try { sid = t.parentStory.id; } catch (e) { continue; }
                 var first = -1, last = -1;
