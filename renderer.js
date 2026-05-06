@@ -217,6 +217,167 @@ $("addRefFile").onclick = async () => {
   if (p && !state.refFiles.includes(p)) { state.refFiles.push(p); renderRefFiles(); }
 };
 
+// ====================== Brand guide ======================
+// Two paths into a brand config for the current run:
+//   (a) User clicks Browse, picks a .pdf — we run brand_extract,
+//       fill state.brandGuide with the parsed result, and (only if
+//       the "Save to memory" checkbox is on at run-time) persist it
+//       after the run completes.
+//   (b) User picks an .indd whose filename contains the name of an
+//       already-saved brand guide — we auto-load that guide. If two
+//       or more saved guides match, the picker modal opens.
+state.brandGuide = null;            // parsed brand JSON to use for THIS run
+state.brandGuideSourcePath = null;  // PDF path the user chose (manual mode)
+state.brandGuideAutoMatched = null; // name of saved guide auto-matched, if any
+
+function setBrandGuideStatus(msg, kind /* "info" | "warn" | "ok" */) {
+  const el = $("brandGuideStatus");
+  if (!msg) { el.style.display = "none"; el.textContent = ""; return; }
+  el.style.display = "";
+  el.textContent = msg;
+  el.style.color = kind === "warn" ? "#a64d00" : (kind === "ok" ? "#2a6f2a" : "");
+}
+
+function renderBrandGuideChips() {
+  // Tiny preview of swatch samples, rendered inline next to the path field.
+  // Removes itself if there's no parsed guide.
+  let host = document.getElementById("brandGuideChips");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "brandGuideChips";
+    host.style.cssText = "display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;";
+    $("brandGuideStatus").parentElement.insertBefore(host, $("brandGuideStatus"));
+  }
+  host.innerHTML = "";
+  const samples = (state.brandGuide && state.brandGuide.swatchSamples) || [];
+  for (const s of samples.slice(0, 12)) {
+    const sw = document.createElement("span");
+    const r = (s.rgb && s.rgb[0]) || 0, g = (s.rgb && s.rgb[1]) || 0, b = (s.rgb && s.rgb[2]) || 0;
+    sw.title = s.label || "";
+    sw.style.cssText = `display:inline-block;width:18px;height:18px;border:1px solid #ddd;border-radius:3px;background:rgb(${r},${g},${b});`;
+    host.appendChild(sw);
+  }
+  if (samples.length > 12) {
+    const more = document.createElement("span");
+    more.textContent = `+${samples.length - 12}`;
+    more.style.cssText = "font-size:11px;opacity:0.6;line-height:18px;";
+    host.appendChild(more);
+  }
+}
+
+async function loadBrandGuideFromPdf(p) {
+  if (!p) return;
+  state.brandGuideSourcePath = p;
+  $("brandGuidePath").value = p;
+  setBrandGuideStatus("Parsing brand guide…", "info");
+  try {
+    const parsed = await ipcRenderer.invoke("extract-brand-guide", { pdfPath: p });
+    state.brandGuide = parsed;
+    state.brandGuideAutoMatched = null;
+    $("brandGuideName").value = parsed.detectedName || parsed.name || "";
+    $("brandGuideName").disabled = !$("brandGuideSaveToMemory").checked;
+    renderBrandGuideChips();
+    setBrandGuideStatus(
+      `Found ${(parsed.swatchSamples || []).length} swatch(es) and ${(parsed.fonts || []).length} font(s)`,
+      "ok");
+  } catch (e) {
+    state.brandGuide = null;
+    setBrandGuideStatus("Couldn't parse: " + (e.message || e), "warn");
+  }
+}
+
+$("pickBrandGuide").onclick = async () => {
+  const p = await ipcRenderer.invoke("pick-file", [{ name: "Brand guide PDF", extensions: ["pdf"] }]);
+  if (p) await loadBrandGuideFromPdf(p);
+};
+
+$("brandGuideSaveToMemory").onchange = () => {
+  const on = $("brandGuideSaveToMemory").checked;
+  $("brandGuideName").disabled = !on || !state.brandGuide;
+};
+
+// When the user picks an .indd, search the saved-guide library for
+// names that appear as substrings of the filename. Hooked onto the
+// existing pickIndd handler — keeps the original behavior intact and
+// adds the auto-match step on top.
+const _origPickIndd = $("pickIndd").onclick;
+$("pickIndd").onclick = async () => {
+  await _origPickIndd();
+  if (!state.indd) return;
+  // Only auto-match when the user hasn't manually picked a brand guide
+  // for this run.
+  if (state.brandGuideSourcePath) return;
+  let matches;
+  try {
+    matches = await ipcRenderer.invoke("match-brand-guides", state.indd);
+  } catch (_) { matches = []; }
+  if (!matches || !matches.length) {
+    state.brandGuideAutoMatched = null;
+    state.brandGuide = null;
+    setBrandGuideStatus("");
+    renderBrandGuideChips();
+    return;
+  }
+  if (matches.length === 1) {
+    await applyAutoMatchedGuide(matches[0].name);
+    return;
+  }
+  // 2+ matches → show picker
+  showBrandGuidePicker(matches);
+};
+
+async function applyAutoMatchedGuide(name) {
+  const full = await ipcRenderer.invoke("read-brand-guide", name);
+  if (!full) return;
+  state.brandGuide = full;
+  state.brandGuideAutoMatched = name;
+  $("brandGuidePath").value = "";    // not a manual pick
+  $("brandGuideName").value = name;
+  $("brandGuideName").disabled = true;
+  $("brandGuideSaveToMemory").checked = false;
+  renderBrandGuideChips();
+  setBrandGuideStatus(`Auto-matched saved brand guide: ${name}`, "ok");
+}
+
+function showBrandGuidePicker(matches) {
+  const list = $("brandGuidePickerList");
+  list.innerHTML = "";
+  let selected = null;
+  matches.forEach((m, idx) => {
+    const row = document.createElement("label");
+    row.className = "ref-file-row";
+    row.style.cssText = "display:flex; align-items:center; gap:10px; padding:8px; cursor:pointer; border:1px solid #e0e0e0; border-radius:6px; margin-bottom:6px;";
+    const swatchHtml = (m.swatchSamples || []).slice(0, 6).map((s) => {
+      const r = s.rgb[0], g = s.rgb[1], b = s.rgb[2];
+      return `<span style="display:inline-block;width:14px;height:14px;border:1px solid #ddd;border-radius:2px;background:rgb(${r},${g},${b});" title="${escapeHtml(s.label || "")}"></span>`;
+    }).join(" ");
+    row.innerHTML = `
+      <input type="radio" name="bgPicker" value="${escapeHtml(m.name)}" ${idx === 0 ? "checked" : ""} />
+      <strong style="flex:1">${escapeHtml(m.name)}</strong>
+      <span class="settings-hint" style="white-space:nowrap;">${m.swatchCount} swatches · ${m.fontCount} fonts</span>
+      <span style="display:inline-flex;gap:3px;">${swatchHtml}</span>
+    `;
+    list.appendChild(row);
+    if (idx === 0) selected = m.name;
+    row.querySelector("input").onchange = () => {
+      selected = m.name;
+      $("brandGuidePickerConfirm").disabled = !selected;
+    };
+  });
+  $("brandGuidePickerConfirm").disabled = !selected;
+  $("brandGuidePickerConfirm").onclick = async () => {
+    $("brandGuidePickerModal").classList.add("hidden");
+    if (selected) await applyAutoMatchedGuide(selected);
+  };
+  $("brandGuidePickerSkip").onclick = () => {
+    $("brandGuidePickerModal").classList.add("hidden");
+    state.brandGuide = null;
+    state.brandGuideAutoMatched = null;
+    setBrandGuideStatus("Brand check skipped for this run", "info");
+  };
+  $("brandGuidePickerModal").classList.remove("hidden");
+}
+
 // ====================== Data Merge mode ======================
 function setMode(mode) {
   appMode = mode;
@@ -610,6 +771,15 @@ setupDropZone(
   }
 );
 
+// Brand-guide zone — same flow as the Browse button: parse the PDF
+// via brand_extract, fill chips + Save-as field. Same handler covers
+// both entry points so behavior stays consistent.
+setupDropZone(
+  $("brandGuidePath").closest(".step"),
+  (p) => isPdf(p),
+  (paths) => { loadBrandGuideFromPdf(paths[0]); }
+);
+
 const isXlsx = (p) => /\.(xlsx|xls)$/i.test(p);
 const isCsv  = (p) => /\.csv$/i.test(p);
 
@@ -748,13 +918,23 @@ $("runBtn").onclick = async () => {
 
   // Default output folder = same folder as the .indd
   const outputDir = state.out || path.dirname(state.indd);
+  // Build the per-run settings payload, layering the brand guide on top.
+  // The brand config is plumbed via settings so the orchestrator picks
+  // it up the same way as min_dpi, max_fonts, etc.
+  const runSettings = { ...settings };
+  if (state.brandGuide) {
+    // Strip the heavy `swatchSamples` from the run config — it's only
+    // used by the renderer for chips. The QA pass needs the names.
+    const { swatchSamples, ...brandForRun } = state.brandGuide;
+    runSettings.brandConfig = brandForRun;
+  }
   const result = await ipcRenderer.invoke("run-orchestrator", {
     pdfPath: state.pdf,
     inddPath: state.indd,
     outputDir: outputDir,
     refFiles: state.refFiles,
     hiResImagesFolder: state.hiResImages,
-    settings: settings,
+    settings: runSettings,
   });
 
   $("progressBarFill").style.width = "100%";
@@ -771,6 +951,21 @@ $("runBtn").onclick = async () => {
     renderSummary(result.findings.findings);
     renderFindings(result.findings.findings);
     $("findings").classList.remove("hidden");
+  }
+
+  // Persist the manually-picked brand guide if Save-to-memory was on.
+  // Auto-matched guides are already saved (that's how they were found),
+  // so we only persist when state.brandGuideSourcePath is set (manual).
+  if (state.brandGuideSourcePath && state.brandGuide && $("brandGuideSaveToMemory").checked) {
+    const saveAs = $("brandGuideName").value.trim();
+    if (saveAs) {
+      try {
+        await ipcRenderer.invoke("save-brand-guide", { ...state.brandGuide, name: saveAs });
+        toast(`Brand guide "${saveAs}" saved to memory`, 2200);
+      } catch (e) {
+        toast("Couldn't save brand guide: " + (e.message || e), 4000);
+      }
+    }
   }
 
   // Use the version-bumped paths returned by the orchestrator, with fallback
@@ -946,9 +1141,48 @@ function openSettings() {
   } else {
     ig.innerHTML = settings.ignoredFindingIds.map((id) => `<span class="ignored-tag">${escapeHtml(id)}</span>`).join("");
   }
+  // Saved brand guides
+  renderSavedBrandGuides();
   $("settingsModal").classList.remove("hidden");
   // Refresh the Ollama status line every time the modal opens
   refreshOllamaStatus();
+}
+
+async function renderSavedBrandGuides() {
+  const host = $("brandGuidesList");
+  if (!host) return;
+  host.innerHTML = "Loading…";
+  let guides = [];
+  try { guides = await ipcRenderer.invoke("list-brand-guides"); } catch (_) {}
+  if (!guides || !guides.length) {
+    host.innerHTML = "No saved brand guides.";
+    return;
+  }
+  host.innerHTML = "";
+  for (const g of guides) {
+    const row = document.createElement("div");
+    row.className = "ref-file-row";
+    row.style.cssText = "display:flex; align-items:center; gap:10px; padding:8px; border:1px solid #e0e0e0; border-radius:6px; margin-bottom:6px;";
+    const swatchHtml = (g.swatchSamples || []).slice(0, 8).map((s) => {
+      const r = s.rgb[0], g2 = s.rgb[1], b = s.rgb[2];
+      return `<span style="display:inline-block;width:14px;height:14px;border:1px solid #ddd;border-radius:2px;background:rgb(${r},${g2},${b});" title="${escapeHtml(s.label || "")}"></span>`;
+    }).join(" ");
+    row.innerHTML = `
+      <strong style="flex:1">${escapeHtml(g.name)}</strong>
+      <span class="settings-hint" style="white-space:nowrap;">${g.swatchCount} swatches · ${g.fontCount} fonts</span>
+      <span style="display:inline-flex;gap:3px;">${swatchHtml}</span>
+      <button class="ref-file-remove" data-name="${escapeHtml(g.name)}" title="Delete">×</button>
+    `;
+    host.appendChild(row);
+  }
+  host.querySelectorAll(".ref-file-remove").forEach((btn) => {
+    btn.onclick = async () => {
+      const name = btn.dataset.name;
+      if (!confirm(`Delete saved brand guide "${name}"?`)) return;
+      await ipcRenderer.invoke("delete-brand-guide", name);
+      renderSavedBrandGuides();
+    };
+  });
 }
 function closeSettings() { $("settingsModal").classList.add("hidden"); }
 

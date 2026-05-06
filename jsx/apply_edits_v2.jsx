@@ -105,6 +105,143 @@
     var doc = app.open(File(inddPath), false);
     L("STEP 1: opened doc: " + doc.name);
 
+    // Force POINTS units so geometricBounds, column widths, and row
+    // heights all come back in the same unit as the PDF annotation
+    // coordinates the classifier sends down. Without this, a doc set
+    // to picas or inches returns geometry numbers that don't match
+    // at_pdf_coords and SET_CELL_STROKE picks the wrong table.
+    var __savedHUnit, __savedVUnit;
+    try {
+        __savedHUnit = doc.viewPreferences.horizontalMeasurementUnits;
+        __savedVUnit = doc.viewPreferences.verticalMeasurementUnits;
+        doc.viewPreferences.horizontalMeasurementUnits = MeasurementUnits.POINTS;
+        doc.viewPreferences.verticalMeasurementUnits   = MeasurementUnits.POINTS;
+    } catch (e) {}
+
+    // ==========================================================
+    // COLOR RESOLUTION — used by SET_CELL_FILL and SET_TEXT_COLOR
+    // ==========================================================
+    // Maps a free-form color spec (sticky-note text) to an InDesign
+    // Swatch / Color object. Resolution order:
+    //   1. Existing doc swatch by exact name match — catches branded
+    //      swatches the designer already set up ("DTE Blue").
+    //   2. CMYK literal "C=## M=## Y=## K=##" — get/create that swatch.
+    //   3. Hex literal "#RRGGBB" — converted to CMYK, then create.
+    //   4. Common color word (red / blue / gray / etc.) — mapped via
+    //      a small lexicon to plausible CMYK values, then created.
+    // Returns the Swatch/Color object on success, null on failure
+    // (caller flags a HUMAN_REVIEW finding so the user can tell what
+    // didn't resolve).
+    var COLOR_LEXICON = {
+        "black":      { swatch: "Black" },
+        "white":      { swatch: "Paper" },
+        "cyan":       { swatch: "Cyan" },
+        "magenta":    { swatch: "Magenta" },
+        "yellow":     { swatch: "Yellow" },
+        "red":        { cmyk: [0, 100, 100, 0] },
+        "blue":       { cmyk: [100, 70, 0, 10] },
+        "navy":       { cmyk: [100, 80, 0, 50] },
+        "green":      { cmyk: [70, 0, 100, 10] },
+        "orange":     { cmyk: [0, 50, 100, 0] },
+        "purple":     { cmyk: [60, 100, 0, 0] },
+        "violet":     { cmyk: [60, 100, 0, 0] },
+        "pink":       { cmyk: [0, 60, 20, 0] },
+        "brown":      { cmyk: [40, 60, 80, 30] },
+        "gray":       { cmyk: [0, 0, 0, 50] },
+        "grey":       { cmyk: [0, 0, 0, 50] },
+        "lightgray":  { cmyk: [0, 0, 0, 20] },
+        "lightgrey":  { cmyk: [0, 0, 0, 20] },
+        "darkgray":   { cmyk: [0, 0, 0, 75] },
+        "darkgrey":   { cmyk: [0, 0, 0, 75] },
+        "teal":       { cmyk: [80, 0, 30, 30] },
+        "gold":       { cmyk: [10, 30, 100, 10] },
+        "silver":     { cmyk: [0, 0, 0, 30] },
+        "maroon":     { cmyk: [30, 100, 100, 50] },
+        "lime":       { cmyk: [40, 0, 100, 0] },
+        "olive":      { cmyk: [40, 30, 100, 30] },
+        "tan":        { cmyk: [10, 25, 50, 0] },
+        "beige":      { cmyk: [5, 10, 25, 0] },
+        "lightblue":  { cmyk: [40, 10, 0, 0] },
+        "darkblue":   { cmyk: [100, 80, 30, 30] },
+        "lightgreen": { cmyk: [30, 0, 60, 0] },
+        "darkgreen":  { cmyk: [80, 30, 100, 50] },
+        "lightred":   { cmyk: [0, 50, 50, 0] },
+        "darkred":    { cmyk: [25, 100, 100, 30] }
+    };
+
+    function getOrCreateCmykSwatch(c, m, y, k) {
+        var name = "C=" + c + " M=" + m + " Y=" + y + " K=" + k;
+        try {
+            var existing = doc.swatches.itemByName(name);
+            if (existing && existing.isValid) return existing;
+        } catch (e) {}
+        try {
+            return doc.colors.add({
+                name: name,
+                model: ColorModel.PROCESS,
+                space: ColorSpace.CMYK,
+                colorValue: [c, m, y, k]
+            });
+        } catch (e) { return null; }
+    }
+
+    function rgbToCmyk(r, g, b) {
+        if (r === 0 && g === 0 && b === 0) return [0, 0, 0, 100];
+        var rf = r / 255, gf = g / 255, bf = b / 255;
+        var k = 1 - Math.max(rf, gf, bf);
+        if (k >= 1) return [0, 0, 0, 100];
+        var c = Math.round(((1 - rf - k) / (1 - k)) * 100);
+        var m = Math.round(((1 - gf - k) / (1 - k)) * 100);
+        var y = Math.round(((1 - bf - k) / (1 - k)) * 100);
+        return [c, m, y, Math.round(k * 100)];
+    }
+
+    function resolveColor(spec) {
+        if (!spec) return null;
+        var s = String(spec).replace(/^\s+|\s+$/g, "");
+        if (!s) return null;
+        // 1. Existing swatch by exact name (case-insensitive match against
+        //    each swatch's actual name).
+        try {
+            var sw = doc.swatches.itemByName(s);
+            if (sw && sw.isValid) return sw;
+        } catch (e) {}
+        try {
+            for (var si = 0; si < doc.swatches.length; si++) {
+                if (String(doc.swatches[si].name).toLowerCase() === s.toLowerCase()) return doc.swatches[si];
+            }
+        } catch (e) {}
+        // 2. CMYK literal: "C=100 M=65 Y=0 K=30" (any whitespace, any case)
+        var mC = s.match(/^C\s*=\s*(\d+)\s*M\s*=\s*(\d+)\s*Y\s*=\s*(\d+)\s*K\s*=\s*(\d+)$/i);
+        if (mC) {
+            return getOrCreateCmykSwatch(parseInt(mC[1], 10), parseInt(mC[2], 10), parseInt(mC[3], 10), parseInt(mC[4], 10));
+        }
+        // 3. Hex literal: "#RRGGBB"
+        var mH = s.match(/^#?([0-9a-fA-F]{6})$/);
+        if (mH) {
+            var hx = mH[1];
+            var cmyk = rgbToCmyk(parseInt(hx.substring(0, 2), 16),
+                                 parseInt(hx.substring(2, 4), 16),
+                                 parseInt(hx.substring(4, 6), 16));
+            return getOrCreateCmykSwatch(cmyk[0], cmyk[1], cmyk[2], cmyk[3]);
+        }
+        // 4. Lexicon — collapse whitespace so "light gray" matches "lightgray"
+        var key = s.toLowerCase().replace(/\s+/g, "");
+        var lex = COLOR_LEXICON[key];
+        if (lex) {
+            if (lex.swatch) {
+                try {
+                    var ssw = doc.swatches.itemByName(lex.swatch);
+                    if (ssw && ssw.isValid) return ssw;
+                } catch (e) {}
+            }
+            if (lex.cmyk) {
+                return getOrCreateCmykSwatch(lex.cmyk[0], lex.cmyk[1], lex.cmyk[2], lex.cmyk[3]);
+            }
+        }
+        return null;
+    }
+
     // ==========================================================
     // TABLE RESOLUTION \u2014 by id, by header signature, by shape, fallback
     // ==========================================================
@@ -119,9 +256,17 @@
                         try { hdr += String(tbl.rows[0].cells[c].contents).replace(/\s+/g, " ").substring(0, 30) + "|"; } catch (e) {}
                     }
                 }
+                // Capture parent frame's geometric bounds so coord-based
+                // edit ops (e.g. SET_CELL_STROKE from a sticky-note position)
+                // can locate which table contains a PDF-coords point. Bounds
+                // returned as [y1, x1, y2, x2] in spread/POINTS units.
+                var fb = null;
+                try { fb = doc.pages[p].textFrames[f].geometricBounds; } catch (e) {}
                 allTables.push({
                     id: "p" + (p+1) + "_tf" + f + "_t" + t,
                     table: tbl,
+                    page: p + 1,
+                    frameBounds: fb,
                     headerSignature: hdr.toLowerCase(),
                     rows: tbl.rows.length,
                     cols: tbl.columns.length
@@ -368,6 +513,192 @@
         }
     }
 
+    // Cell-direct text replacement. Used as a final fallback by the
+    // REPLACE_TEXT handler — InDesign's findText / changeText reports
+    // false-positive replacements ("1 occurrence replaced") for find
+    // strings inside table cells under some conditions, so we walk
+    // every cell in the search scope ourselves and patch via character
+    // range to preserve formatting. Returns the number of cells
+    // actually mutated.
+    function applyCellPatch(scope, find, replace) {
+        if (!find) return 0;
+        // Build the list of cells we're allowed to patch. If scope IS a
+        // Cell, the only candidate is that cell — tightest scoping. For
+        // a Document/Story/TextFrame, we expand to every cell of every
+        // table in scope.
+        var cells = [];
+        try {
+            // Detect a Cell scope by the presence of cell-only props
+            // (`cells`, `parentRow`). Class-name check is unreliable in
+            // ExtendScript so we go by duck typing.
+            var isCell = false;
+            try { isCell = (scope.parentRow !== undefined && scope.cells === undefined) ||
+                          (scope.constructor && String(scope.constructor.name) === "Cell"); } catch (e) {}
+            if (isCell) {
+                cells.push(scope);
+            } else {
+                var tables = [];
+                if (scope === doc) {
+                    for (var si = 0; si < doc.stories.length; si++) {
+                        var st = doc.stories[si];
+                        try {
+                            for (var ti = 0; ti < st.tables.length; ti++) tables.push(st.tables[ti]);
+                        } catch (e) {}
+                    }
+                } else if (scope.parentStory) {
+                    // TextFrame
+                    try {
+                        var ps = scope.parentStory;
+                        for (var ti = 0; ti < ps.tables.length; ti++) tables.push(ps.tables[ti]);
+                    } catch (e) {}
+                } else if (scope.tables) {
+                    for (var ti = 0; ti < scope.tables.length; ti++) tables.push(scope.tables[ti]);
+                }
+                for (var ti2 = 0; ti2 < tables.length; ti2++) {
+                    var tbl = tables[ti2];
+                    try {
+                        for (var r = 0; r < tbl.rows.length; r++) {
+                            for (var c = 0; c < tbl.columns.length; c++) {
+                                try { cells.push(tbl.rows[r].cells[c]); } catch (e) {}
+                            }
+                        }
+                    } catch (e) {}
+                }
+            }
+        } catch (e) {}
+
+        var hits = 0;
+        for (var ci = 0; ci < cells.length; ci++) {
+            var cell = cells[ci];
+            var content = "";
+            try { content = String(cell.contents); } catch (e) {}
+            // Walk every occurrence in this cell — back to front so
+            // character indexes stay stable as we replace shorter
+            // ranges.
+            var positions = [];
+            var start = 0;
+            while (true) {
+                var pos = content.indexOf(find, start);
+                if (pos < 0) break;
+                positions.push(pos);
+                start = pos + find.length;
+            }
+            for (var pi = positions.length - 1; pi >= 0; pi--) {
+                var posIdx = positions[pi];
+                var endIdx = posIdx + find.length;
+                try {
+                    var rangeText = cell.texts[0].characters.itemByRange(posIdx, endIdx - 1);
+                    rangeText.contents = replace;
+                    hits++;
+                } catch (e) {
+                    // Range API failed (rare) — fall back to whole-cell
+                    // rewrite. Loses per-char formatting in the cell;
+                    // last-resort only.
+                    try {
+                        cell.contents = content.split(find).join(replace);
+                        hits++;
+                        break; // whole-cell rewrite handles all positions at once
+                    } catch (e2) {}
+                }
+            }
+        }
+        return hits;
+    }
+
+    // Find the specific table cell at a PDF coordinate. Returns the
+    // Cell object whose visible text bounding box contains (px, py),
+    // or null if the coord isn't inside any cell. Uses
+    // `cell.texts[0].geometricBounds` which InDesign exposes for the
+    // text run inside each cell — so we get a precise cell-level
+    // location regardless of how the table is laid out within its
+    // parent frame (multiple stacked tables in the same frame are
+    // handled correctly).
+    function findCellAtCoords(pageNum, px, py) {
+        if (!pageNum) return null;
+        // Cells don't expose `geometricBounds` directly in this InDesign
+        // version, so we triangulate:
+        //   - X comes from the parent frame's left edge + cumulative
+        //     column widths.
+        //   - Y comes from the first cell's first-line baseline (the
+        //     table's natural Y anchor) + cumulative row heights up to
+        //     the row in question.
+        // This handles tables stacked in a multi-table frame too — each
+        // table has its own first-line baseline so the Y math is local
+        // to the table.
+        for (var ti = 0; ti < allTables.length; ti++) {
+            var tinfo = allTables[ti];
+            if (tinfo.page !== pageNum) continue;
+            var tbl = tinfo.table;
+            var fb = tinfo.frameBounds;
+            if (!fb || fb.length < 4) continue;
+
+            // Build column edges from the frame's left edge.
+            var colEdges = [fb[1]];
+            var xCursor = fb[1];
+            try {
+                for (var c = 0; c < tbl.columns.length; c++) {
+                    var w = 0;
+                    try { w = tbl.columns[c].width; } catch (e) {}
+                    xCursor += w;
+                    colEdges.push(xCursor);
+                }
+            } catch (e) { continue; }
+            // Quick X reject + col index.
+            if (px < colEdges[0] - 5 || px > colEdges[colEdges.length - 1] + 5) continue;
+            var colIdx = -1;
+            for (var c2 = 0; c2 < colEdges.length - 1; c2++) {
+                if (px >= colEdges[c2] - 5 && px <= colEdges[c2 + 1] + 5) {
+                    colIdx = c2; break;
+                }
+            }
+            if (colIdx < 0) continue;
+
+            // Y anchor: first row's first-line baseline. Approximate the
+            // first row's TOP as `baseline − rowHeight` (close enough
+            // for body fonts; cell top inset adds a couple of pt). Then
+            // walk down by cumulative row heights.
+            var anchorBaseline = -1;
+            try {
+                anchorBaseline = tbl.rows[0].cells[0].lines[0].baseline;
+            } catch (e) {}
+            // Fallback for empty first cell — try cells[colIdx] in row 0
+            // or any non-empty cell in row 0.
+            if (anchorBaseline < 0) {
+                try { anchorBaseline = tbl.rows[0].cells[colIdx].lines[0].baseline; } catch (e) {}
+            }
+            if (anchorBaseline < 0) {
+                for (var ac = 0; ac < tbl.columns.length && anchorBaseline < 0; ac++) {
+                    try { anchorBaseline = tbl.rows[0].cells[ac].lines[0].baseline; } catch (e) {}
+                }
+            }
+            if (anchorBaseline < 0) continue;
+            var firstRowH = 12;
+            try { firstRowH = tbl.rows[0].height; } catch (e) {}
+            var rowTop0 = anchorBaseline - firstRowH;
+            var rowEdges = [rowTop0];
+            var yCursor = rowTop0;
+            try {
+                for (var r = 0; r < tbl.rows.length; r++) {
+                    var rh = 0;
+                    try { rh = tbl.rows[r].height; } catch (e) {}
+                    yCursor += rh;
+                    rowEdges.push(yCursor);
+                }
+            } catch (e) { continue; }
+            // Quick Y reject + row index.
+            if (py < rowEdges[0] - 5 || py > rowEdges[rowEdges.length - 1] + 5) continue;
+            var rowIdx = -1;
+            for (var r2 = 0; r2 < rowEdges.length - 1; r2++) {
+                if (py >= rowEdges[r2] - 5 && py <= rowEdges[r2 + 1] + 5) {
+                    rowIdx = r2; break;
+                }
+            }
+            if (rowIdx < 0) continue;
+            try { return tbl.rows[rowIdx].cells[colIdx]; } catch (e) {}
+        }
+        return null;
+    }
+
     function applyEdit(edit) {
         L("\nEDIT [" + edit.op + "] confidence=" + (edit.confidence || "?") + " \u2014 " + (edit.rationale || ""));
         if (edit.op === "HUMAN_REVIEW") {
@@ -433,6 +764,804 @@
             if (rowIdx < 0) { FLAG("DELETE_ROW: no row match"); return; }
             tbl2.rows[rowIdx].remove();
             L("  deleted row " + rowIdx);
+            return;
+        }
+
+        if (op === "SET_CELL_STROKE") {
+            // Modify the stroke (weight + optional color) of cell edges
+            // identified by an annotation's PDF coordinates. Used for
+            // reviewer notes like "delete this black line" or "make this
+            // line gray" pointing at column/row separators.
+            //
+            //   target.page          — page number the annotation sits on
+            //   target.at_pdf_coords — [x, y] in spread/POINTS top-left
+            //   target.orientation   — "vertical" | "horizontal" | "auto"
+            //   target.table_id      — optional explicit table id (skips
+            //                          coord-based table resolution)
+            //   params.weight        — new stroke weight in pt; 0 to remove
+            //   params.color         — optional Swatch name (e.g. "Black",
+            //                          "[None]", "C=0 M=0 Y=0 K=50")
+            //   params.scope         — "column" | "row" | "cell" | "all"
+            //                          (default "all": every cell along
+            //                          the matching column/row boundary)
+            var coords = edit.target && edit.target.at_pdf_coords;
+            var pageHint = edit.target && edit.target.page;
+            var orient = (edit.target && edit.target.orientation) || "auto";
+            var newWeight = (edit.params && edit.params.weight !== undefined) ? Number(edit.params.weight) : 0;
+            var newColorName = (edit.params && edit.params.color) || null;
+            if (!coords || coords.length < 2) { FLAG("SET_CELL_STROKE: missing at_pdf_coords"); return; }
+            var px = coords[0], py = coords[1];
+
+            // Find candidate tables — prefer same-page if the hint is set
+            var matchTable = null;
+            for (var i = 0; i < allTables.length; i++) {
+                var atb = allTables[i];
+                if (pageHint && atb.page !== pageHint) continue;
+                var fb = atb.frameBounds;
+                if (!fb || fb.length < 4) continue;
+                // frameBounds is [y1, x1, y2, x2]; small tolerance for
+                // annotations placed slightly off the table edge.
+                if (px >= fb[1] - 5 && px <= fb[3] + 5 && py >= fb[0] - 5 && py <= fb[2] + 5) {
+                    matchTable = atb;
+                    break;
+                }
+            }
+            // Fallback: closest table center on the requested page
+            if (!matchTable) {
+                var bestD = 1e12;
+                for (var i = 0; i < allTables.length; i++) {
+                    if (pageHint && allTables[i].page !== pageHint) continue;
+                    var fb = allTables[i].frameBounds;
+                    if (!fb || fb.length < 4) continue;
+                    var fcx = (fb[1] + fb[3]) / 2, fcy = (fb[0] + fb[2]) / 2;
+                    var d = (px - fcx) * (px - fcx) + (py - fcy) * (py - fcy);
+                    if (d < bestD) { bestD = d; matchTable = allTables[i]; }
+                }
+            }
+            if (!matchTable) { FLAG("SET_CELL_STROKE: no table found near (" + px + "," + py + ") on page " + pageHint); return; }
+
+            var tbl = matchTable.table;
+            // Note: intentionally NOT calling markTableModified here.
+            // The 3a/3b/3c post-edit passes are for content-mutating ops
+            // (REPLACE_TEXT in cells, ADD_TABLE_ROW, etc.) — re-stamping
+            // alternating fills on a table whose only change was a stroke
+            // weight is an unwanted side effect.
+            var fb = matchTable.frameBounds;
+            var frameLeft = fb[1], frameTop = fb[0];
+
+            // Build cumulative column edges (left → right) from column widths.
+            var colEdges = [frameLeft];
+            var x = frameLeft;
+            for (var c = 0; c < tbl.columns.length; c++) {
+                var w = 0; try { w = tbl.columns[c].width; } catch (e) {}
+                x += w;
+                colEdges.push(x);
+            }
+            // Cumulative row edges (top → bottom) from row heights.
+            var rowEdges = [frameTop];
+            var y = frameTop;
+            for (var r = 0; r < tbl.rows.length; r++) {
+                var h = 0; try { h = tbl.rows[r].height; } catch (e) {}
+                y += h;
+                rowEdges.push(y);
+            }
+
+            // Auto-detect orientation: pick whichever edge type the point
+            // is closer to. "Closer to a column edge" → vertical line.
+            if (orient === "auto") {
+                var bestColD = 1e12;
+                for (var i = 0; i < colEdges.length; i++) {
+                    var d = Math.abs(px - colEdges[i]); if (d < bestColD) bestColD = d;
+                }
+                var bestRowD = 1e12;
+                for (var i = 0; i < rowEdges.length; i++) {
+                    var d = Math.abs(py - rowEdges[i]); if (d < bestRowD) bestRowD = d;
+                }
+                orient = (bestColD <= bestRowD) ? "vertical" : "horizontal";
+            }
+
+            var swatch = null;
+            if (newColorName) {
+                try { swatch = doc.swatches.itemByName(newColorName); if (!swatch.isValid) swatch = null; } catch (e) {}
+            }
+
+            var changed = 0;
+            if (orient === "vertical") {
+                // Find the closest INTERNAL column edge (skip 0 and last —
+                // those are the table's outer borders, not the inter-column
+                // separators a reviewer typically calls out).
+                var bestIdx = -1, bestD = 1e12;
+                for (var i = 1; i < colEdges.length - 1; i++) {
+                    var d = Math.abs(px - colEdges[i]);
+                    if (d < bestD) { bestD = d; bestIdx = i; }
+                }
+                if (bestIdx < 0) { FLAG("SET_CELL_STROKE: no internal column edge"); return; }
+                var leftCol = bestIdx - 1, rightCol = bestIdx;
+                var edgeX = colEdges[bestIdx];
+                // Diagnostic: snapshot first-row stroke values BEFORE
+                // mutation so we can see what was actually there. Helps
+                // catch the case where the visible line is drawn by a
+                // separate page item (Line / Rectangle on top of the
+                // table), not the cell strokes we're modifying.
+                try {
+                    var sampleR = tbl.rows[0].cells[leftCol];
+                    var sampleC = tbl.rows[0].cells[rightCol];
+                    var rW = "?", rN = "?", lW = "?", lN = "?";
+                    try { rW = sampleR.rightEdgeStrokeWeight; rN = sampleR.rightEdgeStrokeColor && sampleR.rightEdgeStrokeColor.name; } catch (e) {}
+                    try { lW = sampleC.leftEdgeStrokeWeight;  lN = sampleC.leftEdgeStrokeColor  && sampleC.leftEdgeStrokeColor.name;  } catch (e) {}
+                    L("  3.STROKE DIAG row0: leftCol.rightEdge w=" + rW + " color=" + rN +
+                      " | rightCol.leftEdge w=" + lW + " color=" + lN);
+                } catch (e) {}
+                // Mutate: weight 0 + color [None] → make any cell-level
+                // stroke truly invisible (weight 0 alone isn't always
+                // enough — InDesign can still draw a hairline if the
+                // stroke type has end-caps).
+                var noneSwatch = null;
+                try { noneSwatch = doc.swatches.itemByName("[None]"); if (!noneSwatch.isValid) noneSwatch = null; } catch (e) {}
+                for (var r = 0; r < tbl.rows.length; r++) {
+                    safe(function () {
+                        var lc = tbl.rows[r].cells[leftCol];
+                        var rc = tbl.rows[r].cells[rightCol];
+                        if (lc) {
+                            lc.rightEdgeStrokeWeight = newWeight;
+                            if (swatch) lc.rightEdgeStrokeColor = swatch;
+                            else if (newWeight === 0 && noneSwatch) lc.rightEdgeStrokeColor = noneSwatch;
+                            changed++;
+                        }
+                        if (rc) {
+                            rc.leftEdgeStrokeWeight = newWeight;
+                            if (swatch) rc.leftEdgeStrokeColor = swatch;
+                            else if (newWeight === 0 && noneSwatch) rc.leftEdgeStrokeColor = noneSwatch;
+                        }
+                    }, "SET_CELL_STROKE row " + r);
+                }
+                L("  modified vertical column edge " + bestIdx + " of table " + matchTable.id +
+                  " across " + tbl.rows.length + " row(s) — weight=" + newWeight +
+                  (newColorName ? " color=" + newColorName : ""));
+                // Page-item scan: any Line / thin Rectangle whose x sits
+                // within 3pt of the modified column edge AND whose
+                // vertical span overlaps the table is most likely the
+                // visible separator the reviewer pointed at. Hide it.
+                if (newWeight === 0) {
+                    var pageObj = matchTable.page ? doc.pages[matchTable.page - 1] : null;
+                    var hidden = 0;
+                    if (pageObj) {
+                        var items = pageObj.allPageItems;
+                        var tableY1 = fb[0], tableY2 = fb[2];
+                        for (var ii = 0; ii < items.length; ii++) {
+                            var it = items[ii];
+                            var clsName = ""; try { clsName = it.constructor.name; } catch (e) {}
+                            if (clsName !== "GraphicLine" && clsName !== "Line" && clsName !== "Rectangle") continue;
+                            var gb = null; try { gb = it.geometricBounds; } catch (e) {}
+                            if (!gb || gb.length < 4) continue;
+                            var ix1 = gb[1], ix2 = gb[3], iy1 = gb[0], iy2 = gb[2];
+                            var w = ix2 - ix1, h = iy2 - iy1;
+                            // Vertical line shape: tall and very thin.
+                            if (w > 3) continue;
+                            // Crosses (or sits inside) the table's y-band.
+                            if (iy2 < tableY1 - 5 || iy1 > tableY2 + 5) continue;
+                            // X within 3pt of the target column edge.
+                            var ixMid = (ix1 + ix2) / 2;
+                            if (Math.abs(ixMid - edgeX) > 3) continue;
+                            try {
+                                it.visible = false;
+                                hidden++;
+                            } catch (e) {}
+                        }
+                    }
+                    if (hidden > 0) L("  also hid " + hidden + " line/rectangle page-item(s) at x≈" + edgeX);
+                }
+            } else {
+                // Horizontal — closest INTERNAL row edge.
+                var bestIdx = -1, bestD = 1e12;
+                for (var i = 1; i < rowEdges.length - 1; i++) {
+                    var d = Math.abs(py - rowEdges[i]);
+                    if (d < bestD) { bestD = d; bestIdx = i; }
+                }
+                if (bestIdx < 0) { FLAG("SET_CELL_STROKE: no internal row edge"); return; }
+                var topRow = bestIdx - 1, bottomRow = bestIdx;
+                for (var c = 0; c < tbl.columns.length; c++) {
+                    safe(function () {
+                        var tc = tbl.rows[topRow].cells[c];
+                        var bc = tbl.rows[bottomRow].cells[c];
+                        if (tc) {
+                            tc.bottomEdgeStrokeWeight = newWeight;
+                            if (swatch) tc.bottomEdgeStrokeColor = swatch;
+                            changed++;
+                        }
+                        if (bc) {
+                            bc.topEdgeStrokeWeight = newWeight;
+                            if (swatch) bc.topEdgeStrokeColor = swatch;
+                        }
+                    }, "SET_CELL_STROKE col " + c);
+                }
+                L("  modified horizontal row edge " + bestIdx + " of table " + matchTable.id +
+                  " across " + tbl.columns.length + " col(s) — weight=" + newWeight +
+                  (newColorName ? " color=" + newColorName : ""));
+            }
+            return;
+        }
+
+        if (op === "SET_CELL_FILL") {
+            // Recolor the background fill of one cell, a row, or a column,
+            // identified by the annotation's PDF coordinates. Used for
+            // reviewer notes like "make this header gray" or "change this
+            // row to white".
+            //
+            //   target.page          — page number the annotation sits on
+            //   target.at_pdf_coords — [x, y] in spread/POINTS top-left
+            //   target.scope         — "cell" (default) | "row" | "column"
+            //   params.color         — color spec (swatch name | CMYK literal
+            //                          | "#RRGGBB" | lexicon word)
+            var fcoords = edit.target && edit.target.at_pdf_coords;
+            var fpage = edit.target && edit.target.page;
+            var fscope = (edit.target && edit.target.scope) || "cell";
+            var fcolorSpec = edit.params && edit.params.color;
+            if (!fcoords || fcoords.length < 2) { FLAG("SET_CELL_FILL: missing at_pdf_coords"); return; }
+            if (!fcolorSpec) { FLAG("SET_CELL_FILL: missing params.color"); return; }
+            var fpx = fcoords[0], fpy = fcoords[1];
+
+            var fillSwatch = resolveColor(fcolorSpec);
+            if (!fillSwatch) {
+                FLAG("SET_CELL_FILL: couldn't resolve color '" + fcolorSpec + "' (no matching swatch and no lexicon entry)");
+                return;
+            }
+
+            // Find the table containing the annotation point — same logic
+            // as SET_CELL_STROKE so behavior stays consistent.
+            var fmatch = null;
+            for (var i = 0; i < allTables.length; i++) {
+                var atb = allTables[i];
+                if (fpage && atb.page !== fpage) continue;
+                var fbb = atb.frameBounds;
+                if (!fbb || fbb.length < 4) continue;
+                if (fpx >= fbb[1] - 5 && fpx <= fbb[3] + 5 && fpy >= fbb[0] - 5 && fpy <= fbb[2] + 5) {
+                    fmatch = atb; break;
+                }
+            }
+            if (!fmatch) { FLAG("SET_CELL_FILL: no table found near (" + fpx + "," + fpy + ") on page " + fpage); return; }
+
+            var ftbl = fmatch.table;
+            var fbb2 = fmatch.frameBounds;
+            // Cumulative column edges → resolve column index
+            var fColEdges = [fbb2[1]];
+            var fx = fbb2[1];
+            for (var c = 0; c < ftbl.columns.length; c++) {
+                var fw = 0; try { fw = ftbl.columns[c].width; } catch (e) {}
+                fx += fw;
+                fColEdges.push(fx);
+            }
+            var fColIdx = -1;
+            for (var c = 0; c < fColEdges.length - 1; c++) {
+                if (fpx >= fColEdges[c] && fpx <= fColEdges[c + 1]) { fColIdx = c; break; }
+            }
+            if (fColIdx < 0) fColIdx = 0;
+            // Cumulative row edges → resolve row index
+            var fRowEdges = [fbb2[0]];
+            var fy = fbb2[0];
+            for (var r = 0; r < ftbl.rows.length; r++) {
+                var fh = 0; try { fh = ftbl.rows[r].height; } catch (e) {}
+                fy += fh;
+                fRowEdges.push(fy);
+            }
+            var fRowIdx = -1;
+            for (var r = 0; r < fRowEdges.length - 1; r++) {
+                if (fpy >= fRowEdges[r] && fpy <= fRowEdges[r + 1]) { fRowIdx = r; break; }
+            }
+            if (fRowIdx < 0) fRowIdx = 0;
+
+            var stamped = 0;
+            if (fscope === "row") {
+                for (var c = 0; c < ftbl.columns.length; c++) {
+                    safe(function () {
+                        ftbl.rows[fRowIdx].cells[c].fillColor = fillSwatch;
+                        try { ftbl.rows[fRowIdx].cells[c].fillTint = 100; } catch (e) {}
+                        stamped++;
+                    }, "SET_CELL_FILL row cell " + c);
+                }
+            } else if (fscope === "column") {
+                for (var r = 0; r < ftbl.rows.length; r++) {
+                    safe(function () {
+                        ftbl.rows[r].cells[fColIdx].fillColor = fillSwatch;
+                        try { ftbl.rows[r].cells[fColIdx].fillTint = 100; } catch (e) {}
+                        stamped++;
+                    }, "SET_CELL_FILL col cell " + r);
+                }
+            } else {
+                safe(function () {
+                    ftbl.rows[fRowIdx].cells[fColIdx].fillColor = fillSwatch;
+                    try { ftbl.rows[fRowIdx].cells[fColIdx].fillTint = 100; } catch (e) {}
+                    stamped = 1;
+                }, "SET_CELL_FILL single cell");
+            }
+            L("  set fill of " + stamped + " cell(s) (" + fscope + ") in table " + fmatch.id +
+              " at row " + fRowIdx + " col " + fColIdx + " → " + fcolorSpec);
+            return;
+        }
+
+        if (op === "SET_TEXT_COLOR") {
+            // Recolor a run of text. Two ways the target arrives:
+            //   target.find          — exact text the classifier wants
+            //                          recolored (most reliable; emits
+            //                          line_text from the annotation)
+            //   target.at_pdf_coords — fallback: x,y near the text. We
+            //                          locate the paragraph at that point
+            //                          and color the whole paragraph.
+            //   params.color         — same color spec as SET_CELL_FILL
+            var tcFind = edit.target && edit.target.find;
+            var tcCoords = edit.target && edit.target.at_pdf_coords;
+            var tcPage = edit.target && edit.target.page;
+            var tcColorSpec = edit.params && edit.params.color;
+            if (!tcColorSpec) { FLAG("SET_TEXT_COLOR: missing params.color"); return; }
+            var tcSwatch = resolveColor(tcColorSpec);
+            if (!tcSwatch) {
+                FLAG("SET_TEXT_COLOR: couldn't resolve color '" + tcColorSpec + "'");
+                return;
+            }
+
+            var tcStamped = 0;
+            if (tcFind) {
+                // Find every occurrence of the literal target text; recolor
+                // the matched runs. Same find/changeText machinery used by
+                // REPLACE_TEXT, but we don't change content — only fill.
+                app.findTextPreferences = NothingEnum.NOTHING;
+                app.changeTextPreferences = NothingEnum.NOTHING;
+                app.findTextPreferences.findWhat = tcFind;
+                var hits = [];
+                try { hits = doc.findText(); } catch (e) {}
+                app.findTextPreferences = NothingEnum.NOTHING;
+                for (var hi = 0; hi < hits.length; hi++) {
+                    safe(function () {
+                        hits[hi].fillColor = tcSwatch;
+                        tcStamped++;
+                    }, "SET_TEXT_COLOR hit " + hi);
+                }
+            }
+            // Coord-based fallback: walk paragraphs in any text frame
+            // whose bounds contain the annotation point. Recolor every
+            // paragraph the point lands inside (usually one).
+            if (tcStamped === 0 && tcCoords && tcCoords.length >= 2) {
+                var tpx = tcCoords[0], tpy = tcCoords[1];
+                var pageObj = tcPage ? doc.pages[tcPage - 1] : null;
+                var tfList = pageObj ? pageObj.textFrames : doc.textFrames;
+                for (var fi = 0; fi < tfList.length; fi++) {
+                    var tfb = null; try { tfb = tfList[fi].geometricBounds; } catch (e) {}
+                    if (!tfb || tfb.length < 4) continue;
+                    if (tpx < tfb[1] - 2 || tpx > tfb[3] + 2 || tpy < tfb[0] - 2 || tpy > tfb[2] + 2) continue;
+                    var paras; try { paras = tfList[fi].paragraphs; } catch (e) { continue; }
+                    for (var pi2 = 0; pi2 < paras.length; pi2++) {
+                        safe(function () {
+                            paras[pi2].fillColor = tcSwatch;
+                            tcStamped++;
+                        }, "SET_TEXT_COLOR para " + pi2);
+                    }
+                    if (tcStamped > 0) break;
+                }
+            }
+            if (tcStamped > 0) {
+                L("  recolored " + tcStamped + " text run(s) → " + tcColorSpec);
+            } else {
+                FLAG("SET_TEXT_COLOR: no matching text found for find='" +
+                     (tcFind || "(none)") + "' at " + (tcCoords ? tcCoords.join(",") : "?"));
+            }
+            return;
+        }
+
+        if (op === "SET_TEXT_SIZE_MATCH") {
+            // "Make this text same size as other fields." Two paths:
+            //   (1) Cell path — annotation lands in a real table cell.
+            //       Walk sibling cells in the same table, tally pointSize
+            //       per character, apply mode to the target cell.
+            //   (2) Frame path — form is built from individual text
+            //       frames (no table). Find target frame at coords, tally
+            //       pointSize across every OTHER text frame on the page,
+            //       apply mode to target frame.
+            // The cell path is tried first; if anything goes wrong locating
+            // its table or finding usable siblings, we fall through to the
+            // frame path silently.
+            var smTarget = edit.target || {};
+            var smPage = smTarget.page;
+            var smCoords = smTarget.at_pdf_coords;
+            if (!smPage || !smCoords || smCoords.length < 2) {
+                FLAG("SET_TEXT_SIZE_MATCH: missing target.page/at_pdf_coords");
+                return;
+            }
+            var smPx = smCoords[0], smPy = smCoords[1];
+
+            // -------- helper: heuristic for "looks like a form label"
+            // A short paragraph ending with `:` (stripping trailing
+            // whitespace). Matches things like "ZIP Code:", "Tax ID #:",
+            // "State:" — the things the reviewer would naturally call
+            // "other fields" in a form layout.
+            function isLabelLike(textObj) {
+                var s = "";
+                try { s = String(textObj.contents || ""); } catch (e) { return false; }
+                s = s.replace(/[\s ]+$/, "");
+                if (s.length === 0 || s.length > 40) return false;
+                return s.charAt(s.length - 1) === ":";
+            }
+
+            // -------- helper: pick modal paragraph-style from a list of
+            // texts, weighted by character count. Returns
+            //   { style, weight, sampleCount } or null.
+            // Style is identified by its .id property (stable across
+            // edits). The returned `style` is the actual ParagraphStyle
+            // object so we can apply it directly.
+            function tallyModalParaStyle(texts) {
+                var weightById = {};
+                var styleById = {};
+                var sampled = 0;
+                for (var ti = 0; ti < texts.length; ti++) {
+                    var t = texts[ti];
+                    if (!t) continue;
+                    var c = "";
+                    try { c = String(t.contents || ""); } catch (e) {}
+                    var bareLen = c.replace(/\s/g, "").length;
+                    if (bareLen === 0) continue;
+                    var aps = null;
+                    try { aps = t.appliedParagraphStyle; } catch (e) {}
+                    if (!aps) continue;
+                    var sid = null;
+                    try { sid = aps.id; } catch (e) {}
+                    if (sid == null) continue;
+                    sampled++;
+                    weightById[sid] = (weightById[sid] || 0) + bareLen;
+                    styleById[sid] = aps;
+                }
+                if (sampled === 0) return null;
+                var bestId = null, bestW = 0;
+                for (var k in weightById) {
+                    if (weightById[k] > bestW) { bestW = weightById[k]; bestId = k; }
+                }
+                if (bestId == null) return null;
+                return { style: styleById[bestId], weight: bestW, sampleCount: sampled };
+            }
+
+            // -------- helper: pick modal pointSize from a list of texts.
+            // texts: array of objects each with .characters collection.
+            // skipTextRef: optional reference to skip (don't sample target itself).
+            // Returns { bestSize, bestWeight, sampleCount } or null.
+            function tallyModalSize(texts, skipTextRef) {
+                var weights = {};
+                var sampled = 0;
+                for (var ti = 0; ti < texts.length; ti++) {
+                    var t = texts[ti];
+                    if (!t || t === skipTextRef) continue;
+                    var contents = "";
+                    try { contents = String(t.contents || ""); } catch (e) {}
+                    if (!contents || contents.replace(/\s/g, "").length === 0) continue;
+                    sampled++;
+                    var chars = null;
+                    try { chars = t.characters; } catch (e) {}
+                    if (!chars) continue;
+                    for (var ci = 0; ci < chars.length; ci++) {
+                        var ch = chars[ci];
+                        var chTxt = "";
+                        try { chTxt = String(ch.contents || ""); } catch (e) {}
+                        if (!chTxt || chTxt.replace(/\s/g, "").length === 0) continue;
+                        var ps = null;
+                        try { ps = ch.pointSize; } catch (e) {}
+                        if (typeof ps !== "number") continue;
+                        var key = String(Math.round(ps * 10) / 10);
+                        weights[key] = (weights[key] || 0) + 1;
+                    }
+                }
+                if (sampled === 0) return null;
+                var best = null, bestW = 0;
+                for (var k in weights) {
+                    if (weights[k] > bestW) {
+                        bestW = weights[k];
+                        best = parseFloat(k);
+                    }
+                }
+                if (best == null || isNaN(best)) return null;
+                return { bestSize: best, bestWeight: bestW, sampleCount: sampled };
+            }
+
+            var smFindEarly = (edit.target && edit.target.find) ? String(edit.target.find) : "";
+
+            // -------- cell path
+            var smCell = findCellAtCoords(smPage, smPx, smPy);
+            // Verify the cell actually contains the marked text — when
+            // forms are laid out as a mix of tables + standalone frames,
+            // findCellAtCoords' coord triangulation can pull a nearby
+            // unrelated cell. If we have a `find` hint and the cell's
+            // contents don't include it, drop the cell ref so we use the
+            // paragraph path instead.
+            if (smCell && smFindEarly) {
+                var smCellContents = "";
+                try { smCellContents = String(smCell.contents || ""); } catch (e) {}
+                if (smCellContents.indexOf(smFindEarly) < 0) {
+                    L("  SET_TEXT_SIZE_MATCH: cell at coords doesn't contain '" +
+                      smFindEarly + "', falling back to paragraph path");
+                    smCell = null;
+                }
+            }
+            if (smCell) {
+                var smTbl = null;
+                try { smTbl = smCell.parentRow.parent; } catch (e) {}
+                if (!smTbl || !smTbl.rows) {
+                    try { smTbl = smCell.parent; } catch (e) {}
+                }
+                if (smTbl && smTbl.rows) {
+                    var siblingTexts = [];
+                    var targetCellText = null;
+                    try { targetCellText = smCell.texts[0]; } catch (e) {}
+                    try {
+                        for (var smR = 0; smR < smTbl.rows.length; smR++) {
+                            var rowCells = null;
+                            try { rowCells = smTbl.rows[smR].cells; } catch (e) {}
+                            if (!rowCells) continue;
+                            for (var smC = 0; smC < rowCells.length; smC++) {
+                                var sib = rowCells[smC];
+                                if (!sib || sib === smCell) continue;
+                                try { siblingTexts.push(sib.texts[0]); } catch (e) {}
+                            }
+                        }
+                    } catch (e) {}
+                    var cellResult = tallyModalSize(siblingTexts, null);
+                    if (cellResult) {
+                        var cellCurrent = null;
+                        try { cellCurrent = smCell.texts[0].pointSize; } catch (e) {}
+                        try {
+                            smCell.texts[0].pointSize = cellResult.bestSize;
+                            L("  SET_TEXT_SIZE_MATCH p" + smPage + " (cell): " +
+                              (typeof cellCurrent === "number" ? cellCurrent : "?") +
+                              "pt → " + cellResult.bestSize +
+                              "pt (matched " + cellResult.bestWeight +
+                              " sibling char(s) across " + cellResult.sampleCount + " cell(s))");
+                            return;
+                        } catch (e) {
+                            FLAG("SET_TEXT_SIZE_MATCH: cell-path apply failed: " + e);
+                            // fall through to frame path
+                        }
+                    }
+                }
+                // Cell path didn't yield a result — try the frame path.
+                L("  SET_TEXT_SIZE_MATCH: cell path didn't find usable siblings, trying frame fallback");
+            }
+
+            // -------- paragraph path
+            // Form layout is built from paragraphs inside a body text
+            // frame, not from a table. Locate the target paragraph using
+            // target.find (the label text the reviewer marked) and resize
+            // only that paragraph; sample modal pointSize from every
+            // OTHER paragraph in the same story so the chosen size
+            // reflects "the rest of the form".
+            var smFind = (edit.target && edit.target.find) ? String(edit.target.find) : "";
+            var smPageObj = null;
+            try { smPageObj = doc.pages[smPage - 1]; } catch (e) {}
+            if (!smPageObj) {
+                FLAG("SET_TEXT_SIZE_MATCH: page " + smPage + " not accessible");
+                return;
+            }
+            // Find the target paragraph. Two strategies, in order:
+            //   (a) findText on the doc for smFind. Pick the hit closest
+            //       to the annotation coords.
+            //   (b) Fall back to walking paragraphs of the smallest text
+            //       frame containing the coords; pick the paragraph
+            //       whose first-line baseline is closest to smPy.
+            var smTarPara = null;
+            var smTarStory = null;
+            if (smFind && smFind.length > 0) {
+                app.findTextPreferences = NothingEnum.NOTHING;
+                app.changeTextPreferences = NothingEnum.NOTHING;
+                app.findTextPreferences.findWhat = smFind;
+                var hits = [];
+                try { hits = doc.findText(); } catch (e) {}
+                app.findTextPreferences = NothingEnum.NOTHING;
+                if (hits && hits.length > 0) {
+                    // Pick the hit whose containing frame matches our page
+                    // and whose baseline is closest to smPy.
+                    var bestDist = Number.MAX_VALUE;
+                    for (var hi2 = 0; hi2 < hits.length; hi2++) {
+                        var h = hits[hi2];
+                        var hFrames = null;
+                        try { hFrames = h.parentTextFrames; } catch (e) {}
+                        if (!hFrames || hFrames.length === 0) continue;
+                        var hFrame = hFrames[0];
+                        var hPage = null;
+                        try { hPage = hFrame.parentPage; } catch (e) {}
+                        if (!hPage) continue;
+                        var hPageNum = -1;
+                        try { hPageNum = hPage.documentOffset + 1; } catch (e) {}
+                        if (hPageNum < 0) {
+                            try { hPageNum = parseInt(hPage.name, 10); } catch (e) {}
+                        }
+                        if (hPageNum !== smPage) continue;
+                        var hBaseline = -1;
+                        try { hBaseline = h.lines[0].baseline; } catch (e) {}
+                        if (hBaseline < 0) continue;
+                        var d = Math.abs(hBaseline - smPy);
+                        if (d < bestDist) {
+                            bestDist = d;
+                            try { smTarPara = h.paragraphs[0]; } catch (e) {}
+                            try { smTarStory = h.parentStory; } catch (e) {}
+                        }
+                    }
+                }
+            }
+            // Fallback: pick paragraph by baseline-Y inside the containing frame.
+            if (!smTarPara) {
+                var smPageFrames = null;
+                try { smPageFrames = smPageObj.textFrames; } catch (e) {}
+                if (!smPageFrames || smPageFrames.length === 0) {
+                    FLAG("SET_TEXT_SIZE_MATCH: no text frames on p" + smPage);
+                    return;
+                }
+                var smTarFrame = null;
+                var bestArea = Number.MAX_VALUE;
+                for (var smFi = 0; smFi < smPageFrames.length; smFi++) {
+                    var smFb = null;
+                    try { smFb = smPageFrames[smFi].geometricBounds; } catch (e) {}
+                    if (!smFb || smFb.length < 4) continue;
+                    if (smPx < smFb[1] - 2 || smPx > smFb[3] + 2) continue;
+                    if (smPy < smFb[0] - 2 || smPy > smFb[2] + 2) continue;
+                    var smArea = (smFb[2] - smFb[0]) * (smFb[3] - smFb[1]);
+                    if (smArea < bestArea) {
+                        bestArea = smArea;
+                        smTarFrame = smPageFrames[smFi];
+                    }
+                }
+                if (!smTarFrame) {
+                    FLAG("SET_TEXT_SIZE_MATCH: no text frame at p" + smPage +
+                         " (" + smPx + "," + smPy + ")");
+                    return;
+                }
+                var fParas = null;
+                try { fParas = smTarFrame.paragraphs; } catch (e) {}
+                if (fParas) {
+                    var paraDist = Number.MAX_VALUE;
+                    for (var pix = 0; pix < fParas.length; pix++) {
+                        var pBaseline = -1;
+                        try { pBaseline = fParas[pix].lines[0].baseline; } catch (e) {}
+                        if (pBaseline < 0) continue;
+                        var pd = Math.abs(pBaseline - smPy);
+                        if (pd < paraDist) {
+                            paraDist = pd;
+                            smTarPara = fParas[pix];
+                        }
+                    }
+                }
+                try { smTarStory = smTarFrame.parentStory; } catch (e) {}
+            }
+            if (!smTarPara || !smTarStory) {
+                FLAG("SET_TEXT_SIZE_MATCH: could not locate target paragraph at p" +
+                     smPage + " for find='" + (smFind || "(none)") + "'");
+                return;
+            }
+            // Sample peer paragraphs from EVERY text frame on the page,
+            // not just the target's story. Form labels are typically
+            // in separate small text frames, so a story-only sample
+            // misses them. Skip the target paragraph itself.
+            var pageFramesAll = null;
+            try { pageFramesAll = smPageObj.textFrames; } catch (e) {}
+            var peerParaTexts = [];
+            var smTarParaContents = "";
+            try { smTarParaContents = String(smTarPara.contents || ""); } catch (e) {}
+            if (pageFramesAll) {
+                for (var pfi = 0; pfi < pageFramesAll.length; pfi++) {
+                    var pfFrame = pageFramesAll[pfi];
+                    var pfStory = null;
+                    try { pfStory = pfFrame.parentStory; } catch (e) {}
+                    if (!pfStory) continue;
+                    var pfParas = null;
+                    try { pfParas = pfStory.paragraphs; } catch (e) {}
+                    if (!pfParas) continue;
+                    for (var ppi = 0; ppi < pfParas.length; ppi++) {
+                        var pp = pfParas[ppi];
+                        var ppc = "";
+                        try { ppc = String(pp.contents || ""); } catch (e) {}
+                        if (ppc === smTarParaContents) continue;
+                        peerParaTexts.push(pp);
+                    }
+                }
+            }
+            // Cell paragraphs live in their own stories (not the
+            // textFrame's story), so the textFrames walk above misses
+            // them. Walk every cell of every table on the same page
+            // explicitly. Form labels often live in cells with a "Table
+            // body" style, exactly the peers we want to match against.
+            for (var smTbi = 0; smTbi < allTables.length; smTbi++) {
+                if (allTables[smTbi].page !== smPage) continue;
+                var smPgTbl = allTables[smTbi].table;
+                if (!smPgTbl || !smPgTbl.rows) continue;
+                try {
+                    for (var smTRi = 0; smTRi < smPgTbl.rows.length; smTRi++) {
+                        var smTRcells = null;
+                        try { smTRcells = smPgTbl.rows[smTRi].cells; } catch (e) {}
+                        if (!smTRcells) continue;
+                        for (var smTCi = 0; smTCi < smTRcells.length; smTCi++) {
+                            var smCellSib = smTRcells[smTCi];
+                            if (!smCellSib) continue;
+                            var smCellParas = null;
+                            try { smCellParas = smCellSib.paragraphs; } catch (e) {}
+                            if (!smCellParas) continue;
+                            for (var smCPi = 0; smCPi < smCellParas.length; smCPi++) {
+                                var smCellPara = smCellParas[smCPi];
+                                var smCellPC = "";
+                                try { smCellPC = String(smCellPara.contents || ""); } catch (e) {}
+                                if (smCellPC === smTarParaContents) continue;
+                                peerParaTexts.push(smCellPara);
+                            }
+                        }
+                    }
+                } catch (e) {}
+            }
+            // Narrow peer set when the target looks like a form label —
+            // a story usually mixes long body paragraphs with short
+            // colon-terminated form labels, and the reviewer means "match
+            // the OTHER labels" not "match the body". When the target is
+            // label-like, filter peers to also-label-like paragraphs.
+            // Otherwise sample everything (covers heading/body resize cases).
+            var targetIsLabel = isLabelLike(smTarPara);
+            var filteredPeers = peerParaTexts;
+            if (targetIsLabel) {
+                filteredPeers = [];
+                for (var fpi = 0; fpi < peerParaTexts.length; fpi++) {
+                    if (isLabelLike(peerParaTexts[fpi])) filteredPeers.push(peerParaTexts[fpi]);
+                }
+                // Don't fall back to all peers if the filter empties out —
+                // a body-paragraph mode would drag the label to body size.
+                if (filteredPeers.length === 0) {
+                    FLAG("SET_TEXT_SIZE_MATCH: no peer label-like paragraphs on p" + smPage);
+                    return;
+                }
+            }
+            // Prefer applying a paragraph STYLE rather than a raw
+            // pointSize — that captures all the formatting (size, font,
+            // leading, color), which is usually what "match the others"
+            // really means. Only fall back to pointSize if the peers
+            // disagree on style (no clear modal).
+            var styleResult = tallyModalParaStyle(filteredPeers);
+            var targetCurrentStyleName = "?";
+            try { targetCurrentStyleName = smTarPara.appliedParagraphStyle.name; } catch (e) {}
+            if (styleResult) {
+                var newStyleName = "?";
+                try { newStyleName = styleResult.style.name; } catch (e) {}
+                if (newStyleName === targetCurrentStyleName) {
+                    // Same style already — just clear local overrides
+                    // that drifted the appearance, then resample size.
+                    try { smTarPara.applyParagraphStyle(styleResult.style, true); } catch (e) {}
+                    L("  SET_TEXT_SIZE_MATCH p" + smPage + " (para): '" +
+                      String(smTarPara.contents || "").substring(0, 40) +
+                      "' style already '" + targetCurrentStyleName +
+                      "', cleared local overrides (matched " + styleResult.weight +
+                      " peer char(s) across " + styleResult.sampleCount + " paragraph(s))");
+                    return;
+                }
+                try {
+                    smTarPara.applyParagraphStyle(styleResult.style, true);
+                    L("  SET_TEXT_SIZE_MATCH p" + smPage + " (para): '" +
+                      String(smTarPara.contents || "").substring(0, 40) +
+                      "' style '" + targetCurrentStyleName + "' → '" + newStyleName +
+                      "' (matched " + styleResult.weight +
+                      " peer char(s) across " + styleResult.sampleCount + " paragraph(s))");
+                    return;
+                } catch (e) {
+                    FLAG("SET_TEXT_SIZE_MATCH: failed to apply paragraph style: " + e);
+                    // fall through to pointSize fallback
+                }
+            }
+            // Pointsize-only fallback (peers disagree on style).
+            var paraResult = tallyModalSize(filteredPeers, null);
+            if (!paraResult) {
+                FLAG("SET_TEXT_SIZE_MATCH: no usable style or pointSize across peer paragraphs on p" + smPage);
+                return;
+            }
+            var paraCurrent = null;
+            try { paraCurrent = smTarPara.pointSize; } catch (e) {}
+            try {
+                smTarPara.pointSize = paraResult.bestSize;
+                L("  SET_TEXT_SIZE_MATCH p" + smPage + " (para): '" +
+                  String(smTarPara.contents || "").substring(0, 40) + "' " +
+                  (typeof paraCurrent === "number" ? paraCurrent : "?") +
+                  "pt → " + paraResult.bestSize +
+                  "pt (matched " + paraResult.bestWeight +
+                  " peer char(s) across " + paraResult.sampleCount + " paragraph(s); style mode unclear)");
+            } catch (e) {
+                FLAG("SET_TEXT_SIZE_MATCH: failed to set paragraph pointSize: " + e);
+            }
             return;
         }
 
@@ -974,6 +2103,73 @@
             var replace = edit.params && edit.params.replace_with;
             var isRegex = !!(edit.params && edit.params.is_regex);
             if (!find) { FLAG("REPLACE_TEXT: no find string"); return; }
+            // Location scoping: when the classifier passes the
+            // annotation's page + rect-center, prefer running find/
+            // replace ONLY in the text frame at those coords. A reviewer
+            // who struck "Mini" on one specific cell shouldn't trigger a
+            // doc-wide replace if the same string appears in another
+            // template/cell. Falls back to doc-wide if no frame at the
+            // coords (catches cases where the coord is on a hidden layer
+            // or the annotation rect is off-frame).
+            var scopePageNum = edit.target && edit.target.page;
+            var scopeCoords = edit.target && edit.target.at_pdf_coords;
+            var scopeContainer = null;  // TextFrame OR Cell to scope find inside
+            var scopeKind = "doc";  // for logging
+            if (scopePageNum && scopeCoords && scopeCoords.length >= 2) {
+                var spx = scopeCoords[0], spy = scopeCoords[1];
+                // First preference: a specific Cell. Tables nest inside a
+                // text frame's story, but multiple cells (or even nested
+                // tables) sharing the same frame would all share the
+                // frame as their scope — too coarse. Cell-level scoping
+                // means a strike on one cell can't cascade to neighbors.
+                scopeContainer = findCellAtCoords(scopePageNum, spx, spy);
+                if (scopeContainer) scopeKind = "cell";
+                // Second preference: the TextFrame at the coords (for
+                // body text outside any table).
+                if (!scopeContainer) {
+                    try {
+                        var sp = doc.pages[scopePageNum - 1];
+                        if (sp) {
+                            for (var sfi = 0; sfi < sp.textFrames.length; sfi++) {
+                                var stf = sp.textFrames[sfi];
+                                var sfb = null;
+                                try { sfb = stf.geometricBounds; } catch (e) {}
+                                if (!sfb || sfb.length < 4) continue;
+                                if (spx >= sfb[1] - 5 && spx <= sfb[3] + 5 &&
+                                        spy >= sfb[0] - 5 && spy <= sfb[2] + 5) {
+                                    scopeContainer = stf;
+                                    if (scopeKind === "doc") scopeKind = "frame";
+                                    break;
+                                }
+                            }
+                        }
+                    } catch (e) {}
+                }
+                L("  REPLACE_TEXT scope: " + scopeKind + " at p" + scopePageNum +
+                  " (" + spx + "," + spy + ") for find=\"" + String(find).substring(0, 40) + "\"");
+            }
+            // The find/change calls below use this `searchScope`. It can
+            // be a Cell, a TextFrame, or the whole Document — they all
+            // implement the same find/changeText/changeGrep interface.
+            var searchScope = scopeContainer || doc;
+            // Validity probe: a Cell or TextFrame ref captured pre-apply
+            // can go stale if a prior edit restructured its container.
+            // changeText on an invalid object throws "Object is invalid"
+            // and aborts the whole edit. Touch a cheap property first;
+            // if it throws, drop the scope and run doc-wide instead.
+            if (scopeContainer) {
+                var probeOK = false;
+                try {
+                    var _probe = scopeContainer.contents;
+                    probeOK = true;
+                } catch (e) {}
+                if (!probeOK) {
+                    L("  REPLACE_TEXT scope object invalid at apply time, falling back to doc-wide");
+                    searchScope = doc;
+                    scopeContainer = null;
+                    scopeKind = "doc";
+                }
+            }
             // Two modes:
             //   - Literal (default): findText/changeText — find string is taken
             //     as literal characters. $, (, ), . are NOT regex metachars.
@@ -985,7 +2181,19 @@
                 app.changeGrepPreferences = NothingEnum.NOTHING;
                 app.findGrepPreferences.findWhat = find;
                 app.changeGrepPreferences.changeTo = String(replace || "");
-                var hitsRArr = doc.changeGrep();
+                var hitsRArr = [];
+                try {
+                    hitsRArr = searchScope.changeGrep();
+                } catch (e) {
+                    L("  scoped changeGrep threw (" + e + "), retrying doc-wide");
+                    try { hitsRArr = doc.changeGrep(); } catch (e2) {
+                        L("  doc-wide changeGrep also threw: " + e2);
+                        hitsRArr = [];
+                    }
+                    searchScope = doc;
+                    scopeContainer = null;
+                    scopeKind = "doc";
+                }
                 noteChangedTexts(hitsRArr);
                 var hitsR = hitsRArr.length;
                 L("  replaced " + hitsR + " occurrence(s) [regex] of \"" + find + "\"");
@@ -996,7 +2204,24 @@
                 app.changeTextPreferences = NothingEnum.NOTHING;
                 app.findTextPreferences.findWhat = find;
                 app.changeTextPreferences.changeTo = String(replace || "");
-                var hitsArr = doc.changeText();
+                // Wrap the changeText call: a stale or otherwise invalid
+                // scope (e.g. a Cell whose row was reflowed by a prior
+                // edit) throws "Object is invalid" and aborts the whole
+                // edit. On failure, fall back to the doc-wide scope so
+                // the edit still has a chance.
+                var hitsArr = [];
+                try {
+                    hitsArr = searchScope.changeText();
+                } catch (e) {
+                    L("  scoped changeText threw (" + e + "), retrying doc-wide");
+                    try { hitsArr = doc.changeText(); } catch (e2) {
+                        L("  doc-wide changeText also threw: " + e2);
+                        hitsArr = [];
+                    }
+                    searchScope = doc;
+                    scopeContainer = null;
+                    scopeKind = "doc";
+                }
                 noteChangedTexts(hitsArr);
                 var hits = hitsArr.length;
                 app.findTextPreferences = NothingEnum.NOTHING;
@@ -1054,7 +2279,7 @@
                     app.changeGrepPreferences.changeTo = replaceTo;
                     var n = 0;
                     try {
-                        var arr = doc.changeGrep();
+                        var arr = searchScope.changeGrep();
                         noteChangedTexts(arr);
                         n = arr.length;
                     } catch (e) {}
@@ -1076,7 +2301,7 @@
                     app.changeTextPreferences.changeTo = r;
                     var n = 0;
                     try {
-                        var arr = doc.changeText();
+                        var arr = searchScope.changeText();
                         noteChangedTexts(arr);
                         n = arr.length;
                     } catch (e) {}
@@ -1137,6 +2362,62 @@
                         if (hits === 0) {
                             var grepPat2 = flexibleGrep(normalizeWS(fb2Find));
                             hits = tryGrep(grepPat2, normalizeWS(fb2Replace), "(after context-extended GREP fallback)");
+                        }
+                    }
+                }
+                // Cell-direct patch fallback. doc.changeText / TextFrame
+                // .changeText sometimes report "1 occurrence replaced"
+                // for find strings inside table cells but don't actually
+                // mutate the cell — InDesign quirk specifically with
+                // mixed-format cells. This pass walks every cell in the
+                // search scope and, if any cell still contains the find
+                // string, patches it via a character-range assignment
+                // (preserves surrounding formatting). Catches both the
+                // false-success case AND any case where changeText
+                // genuinely missed a cell.
+                var cellHits = 0;
+                try {
+                    cellHits = applyCellPatch(searchScope, find, String(replace || ""));
+                } catch (e) {
+                    L("  applyCellPatch threw (" + e + "), skipping cell-direct fallback");
+                    cellHits = 0;
+                }
+                if (cellHits > 0) {
+                    hits += cellHits;
+                    L("  replaced " + cellHits + " occurrence(s) of \"" + find + "\" via cell-direct patch");
+                }
+                // Order-dependency fallback. Two edits on the same cell
+                // can collide: edit A changes "§" to "‡" first, then
+                // edit B with find="…Discounts§" matches nothing because
+                // the cell now reads "…Discounts‡". When the literal
+                // patch above misses, retry the find with common
+                // single-char substitutions that earlier edits may have
+                // already applied (§↔‡, †↔‡, etc.). Applies only inside
+                // the existing scope so it's safe.
+                if (cellHits === 0 && hits === 0) {
+                    // Use \u escapes — when the .jsx is read by
+                    // ExtendScript without an explicit encoding, raw
+                    // multi-byte chars in source become mojibake and
+                    // indexOf misses. §=§, ‡=‡, †=†.
+                    var SECT = "\u00A7", DDAG = "\u2021", DAG = "\u2020";
+                    var subPairs = [
+                        [SECT, DDAG], [DDAG, SECT],
+                        [DAG, DDAG],  [DDAG, DAG],
+                        [SECT, DAG],  [DAG, SECT]
+                    ];
+                    for (var spi = 0; spi < subPairs.length; spi++) {
+                        var fromCh = subPairs[spi][0];
+                        var toCh = subPairs[spi][1];
+                        if (String(find).indexOf(fromCh) < 0) continue;
+                        var altFind = String(find).split(fromCh).join(toCh);
+                        var altReplace = String(replace || "").split(fromCh).join(toCh);
+                        var altHits = 0;
+                        try { altHits = applyCellPatch(searchScope, altFind, altReplace); } catch (e) { altHits = 0; }
+                        if (altHits > 0) {
+                            hits += altHits;
+                            L("  replaced " + altHits + " occurrence(s) of \"" + altFind +
+                              "\" via cell-direct patch (after '" + fromCh + "→" + toCh + "' substitution)");
+                            break;
                         }
                     }
                 }
@@ -1573,42 +2854,92 @@
         // designer's trailing whitespace before the break.
         var pattern = "(\\S)\\s*[\\x{000A}\\x{2028}]\\s*(?=[a-z])";
         var replaceTo = "$1 ";
-        var totalChanged = 0, totalRestored = 0;
+        var totalChanged = 0, totalRestored = 0, totalSkippedCellPara = 0;
         for (var sid in modifiedStories) {
             var story = modifiedStories[sid];
             if (!story || !story.isValid) continue;
-            // Snapshot the story's text BEFORE so we can replay if a
-            // frame overflows after.
-            var beforeContents = null;
-            try { beforeContents = story.contents; } catch (e) {}
-            var parentFrame = null;
-            try { parentFrame = story.textContainers[0]; } catch (e) {}
-            var overflowBefore = false;
-            try { if (parentFrame) overflowBefore = parentFrame.overflows; } catch (e) {}
-            app.findGrepPreferences = NothingEnum.NOTHING;
-            app.changeGrepPreferences = NothingEnum.NOTHING;
-            app.findGrepPreferences.findWhat = pattern;
-            app.changeGrepPreferences.changeTo = replaceTo;
-            var changed = [];
-            try { changed = story.changeGrep(); } catch (e) {}
-            app.findGrepPreferences = NothingEnum.NOTHING;
-            app.changeGrepPreferences = NothingEnum.NOTHING;
-            var n = changed.length;
-            if (n === 0) continue;
-            var overflowAfter = false;
-            try { if (parentFrame) overflowAfter = parentFrame.overflows; } catch (e) {}
-            if (!overflowBefore && overflowAfter && beforeContents !== null) {
-                // Replay original to restore — ExtendScript permits a
-                // bulk story.contents reassignment which is the
-                // simplest way to back out an unsafe change.
-                try { story.contents = beforeContents; } catch (e) {}
-                totalRestored += n;
-            } else {
-                totalChanged += n;
+
+            var hasTables = false;
+            try { hasTables = story.tables && story.tables.length > 0; } catch (e) {}
+
+            if (!hasTables) {
+                // Fast path — no inline tables in this story, so a single
+                // story-wide changeGrep is safe.
+                var beforeContents = null;
+                try { beforeContents = story.contents; } catch (e) {}
+                var parentFrame = null;
+                try { parentFrame = story.textContainers[0]; } catch (e) {}
+                var overflowBefore = false;
+                try { if (parentFrame) overflowBefore = parentFrame.overflows; } catch (e) {}
+                app.findGrepPreferences = NothingEnum.NOTHING;
+                app.changeGrepPreferences = NothingEnum.NOTHING;
+                app.findGrepPreferences.findWhat = pattern;
+                app.changeGrepPreferences.changeTo = replaceTo;
+                var changed = [];
+                try { changed = story.changeGrep(); } catch (e) {}
+                app.findGrepPreferences = NothingEnum.NOTHING;
+                app.changeGrepPreferences = NothingEnum.NOTHING;
+                var n = changed.length;
+                if (n > 0) {
+                    var overflowAfter = false;
+                    try { if (parentFrame) overflowAfter = parentFrame.overflows; } catch (e) {}
+                    if (!overflowBefore && overflowAfter && beforeContents !== null) {
+                        try { story.contents = beforeContents; } catch (e) {}
+                        totalRestored += n;
+                    } else {
+                        totalChanged += n;
+                    }
+                }
+                continue;
+            }
+
+            // Story has inline tables. Walk paragraphs individually and
+            // skip cell paragraphs. paragraph.parentTextFrames returns
+            // the page text frames that contain the paragraph; for cell
+            // paragraphs (which live in the cell's own story, not in
+            // any TextFrame) the array is empty. That's a deterministic
+            // test we can rely on, unlike the class-name comparison we
+            // tried before.
+            var paragraphCount = 0;
+            try { paragraphCount = story.paragraphs.length; } catch (e) {}
+            for (var pi = 0; pi < paragraphCount; pi++) {
+                var para = null;
+                try { para = story.paragraphs[pi]; } catch (e) {}
+                if (!para || !para.isValid) continue;
+                var ptf = null;
+                try { ptf = para.parentTextFrames; } catch (e) {}
+                if (!ptf || ptf.length === 0) {
+                    totalSkippedCellPara++;
+                    continue; // cell paragraph — leave alone
+                }
+                var paraFrame = ptf[0];
+                var pOverflowBefore = false;
+                try { pOverflowBefore = paraFrame.overflows; } catch (e) {}
+                var paraBefore = null;
+                try { paraBefore = para.contents; } catch (e) {}
+                app.findGrepPreferences = NothingEnum.NOTHING;
+                app.changeGrepPreferences = NothingEnum.NOTHING;
+                app.findGrepPreferences.findWhat = pattern;
+                app.changeGrepPreferences.changeTo = replaceTo;
+                var pChanged = [];
+                try { pChanged = para.changeGrep(); } catch (e) {}
+                app.findGrepPreferences = NothingEnum.NOTHING;
+                app.changeGrepPreferences = NothingEnum.NOTHING;
+                var pn = pChanged.length;
+                if (pn === 0) continue;
+                var pOverflowAfter = false;
+                try { pOverflowAfter = paraFrame.overflows; } catch (e) {}
+                if (!pOverflowBefore && pOverflowAfter && paraBefore !== null) {
+                    try { para.contents = paraBefore; } catch (e) {}
+                    totalRestored += pn;
+                } else {
+                    totalChanged += pn;
+                }
             }
         }
         L("  3e: scanned " + storyCount + " modified stor(ies); reflowed " +
-          totalChanged + " line break(s), restored " + totalRestored + " (overflow)");
+          totalChanged + " line break(s) in body paragraphs; restored " +
+          totalRestored + " (overflow); skipped " + totalSkippedCellPara + " cell paragraph(s)");
     }, "3e stale-break removal");
 
     // 3f: noBreak on email addresses and URLs (doc-wide, idempotent)
@@ -1641,6 +2972,76 @@
         applyNoBreak("[\\w._%+-]+@[\\w.-]+\\.[A-Za-z]{2,}", "emails");
         applyNoBreak("https?://[\\S]+", "URLs");
     }, "3f email/URL noBreak");
+
+    // 3g: Body-copy auto-fit when a modified story now overflows.
+    // ----------------------------------------------------------
+    // Existing pass 3b adjusts tracking on atomic single-line cells.
+    // 3g extends the same idea to body paragraphs: when a REPLACE_TEXT
+    // edit lands a few characters too long for the frame, try
+    // progressively tighter tracking (-5, -10, -15, -20 in 1/1000 em)
+    // on the story's paragraphs before giving up and letting the QA
+    // pass flag TEXT_OVERSET. Tracking-only — we don't touch font size
+    // automatically (would too easily create visible inconsistency
+    // with surrounding documents).
+    //
+    // Only stories whose parent frame ACTUALLY overflows are touched,
+    // and the original tracking is restored if no step within the
+    // tolerance band fits.
+    safe(function () {
+        // Off by default — the user found the tracking adjustments too
+        // aggressive on tables and other tight layouts. Opt-in via the
+        // `body_auto_fit` qaConfig flag (also exposed in Settings).
+        if (!qaConfig.body_auto_fit) return;
+        var TRACKING_STEPS = [-5, -10, -15, -20];  // 1/1000 em
+        var fitted = 0, restored = 0;
+        for (var sid in modifiedStories) {
+            var story = modifiedStories[sid];
+            if (!story || !story.isValid) continue;
+            var frame = null;
+            try { frame = story.textContainers[0]; } catch (e) {}
+            if (!frame) continue;
+            var overflowsNow = false;
+            try { overflowsNow = frame.overflows; } catch (e) {}
+            if (!overflowsNow) continue;  // nothing to fit
+
+            // Snapshot tracking on every paragraph so we can restore.
+            var paras = story.paragraphs;
+            var orig = [];
+            for (var pi = 0; pi < paras.length; pi++) {
+                try { orig.push(paras[pi].tracking); } catch (e) { orig.push(null); }
+            }
+
+            var fixed = false;
+            for (var ts = 0; ts < TRACKING_STEPS.length; ts++) {
+                var delta = TRACKING_STEPS[ts];
+                for (var pi = 0; pi < paras.length; pi++) {
+                    if (orig[pi] != null) {
+                        try { paras[pi].tracking = orig[pi] + delta; } catch (e) {}
+                    }
+                }
+                var stillOver = true;
+                try { stillOver = frame.overflows; } catch (e) {}
+                if (!stillOver) { fixed = true; break; }
+            }
+
+            if (fixed) {
+                fitted++;
+            } else {
+                // Restore — overflow couldn't be resolved within tolerance.
+                for (var pi = 0; pi < paras.length; pi++) {
+                    if (orig[pi] != null) {
+                        try { paras[pi].tracking = orig[pi]; } catch (e) {}
+                    }
+                }
+                restored++;
+            }
+        }
+        if (fitted > 0 || restored > 0) {
+            L("  3g: body-copy auto-fit — fitted " + fitted +
+              " story(ies) via tracking; restored " + restored +
+              " (still overflows after -20 tracking — TEXT_OVERSET will flag)");
+        }
+    }, "3g body-copy auto-fit");
 
     // ==========================================================
     // STEP 4: COMPREHENSIVE QA SCAN
@@ -1772,6 +3173,73 @@
         var maxFontsThreshold = qaConfig.max_fonts || 4;
         if (doc.fonts.length > maxFontsThreshold && checkEnabled("FONT_TOO_MANY")) FINDING("warning", "FONT_TOO_MANY", "fonts", "doc", doc.fonts.length + " distinct fonts (consider consolidating to ≤" + maxFontsThreshold + ")");
     }, "fonts");
+
+    // ---- BRAND_OFFFONT / BRAND_OFFCOLOR ----
+    // Auto-discovered brand.json (loaded by orchestrate.py from the
+    // .indd's parent or any ancestor folder) lists approved swatch
+    // names and font family names. Anything in the doc whose name
+    // isn't on the list gets flagged. Doesn't auto-fix — designer
+    // intent could justify any one-off use, so this is review-only.
+    // Skipped silently if no brand.json was found in the source tree.
+    safe(function () {
+        if (!qaConfig.brand) return;
+        var brandSwatches = (qaConfig.brand.swatches || []);
+        var brandFonts    = (qaConfig.brand.fonts    || []);
+        function normName(s) { return String(s || "").toLowerCase().replace(/\s+/g, " ").replace(/^\s+|\s+$/g, ""); }
+        var brandSwatchSet = {};
+        for (var i = 0; i < brandSwatches.length; i++) brandSwatchSet[normName(brandSwatches[i])] = true;
+        var brandFontSet = {};
+        for (var i = 0; i < brandFonts.length; i++) brandFontSet[normName(brandFonts[i])] = true;
+
+        // Skip InDesign's built-in default swatches every doc carries.
+        var DEFAULT_SWATCHES = {
+            "[none]": 1, "[paper]": 1, "[black]": 1, "[registration]": 1,
+            "c=0 m=0 y=0 k=0": 1, "c=100 m=0 y=0 k=0": 1,
+            "c=0 m=100 y=0 k=0": 1, "c=0 m=0 y=100 k=0": 1,
+            "c=100 m=90 y=10 k=0": 1, "c=15 m=100 y=100 k=0": 1,
+            "c=75 m=5 y=100 k=0": 1, "c=100 m=0 y=0 k=0": 1
+        };
+        if (brandSwatches.length > 0) {
+            var offColor = [];
+            for (var i = 0; i < doc.swatches.length; i++) {
+                var sw; try { sw = doc.swatches[i]; } catch (e) { continue; }
+                var nm = ""; try { nm = String(sw.name || ""); } catch (e) {}
+                var key = normName(nm);
+                if (!key) continue;
+                if (DEFAULT_SWATCHES[key]) continue;
+                if (!brandSwatchSet[key]) offColor.push(nm);
+            }
+            if (offColor.length > 0 && checkEnabled("BRAND_OFFCOLOR")) {
+                FINDING("warning", "BRAND_OFFCOLOR", "brand", "doc",
+                    offColor.length + " off-brand swatch(es): " + offColor.slice(0, 6).join(", "),
+                    false,
+                    "Replace with an approved brand swatch, or add to brand.json if intentional");
+            }
+        }
+
+        // Off-brand fonts — match family name (part before first hyphen)
+        // so "GoodPro-NarrBold" matches "GoodPro" in brand.json.
+        if (brandFonts.length > 0) {
+            var offFont = [];
+            for (var i = 0; i < doc.fonts.length; i++) {
+                var fn = ""; try { fn = String(doc.fonts[i].fullName || ""); } catch (e) {}
+                if (!fn) continue;
+                var family = fn.split(/[\s\t\-]/)[0];
+                if (!family) continue;
+                var fkey = normName(family);
+                var fullKey = normName(fn);
+                if (brandFontSet[fkey] || brandFontSet[fullKey]) continue;
+                offFont.push(fn);
+            }
+            if (offFont.length > 0 && checkEnabled("BRAND_OFFFONT")) {
+                FINDING("warning", "BRAND_OFFFONT", "brand", "doc",
+                    offFont.length + " off-brand font(s): " + offFont.slice(0, 6).join(", "),
+                    false,
+                    "Replace with an approved brand font, or add to brand.json if intentional");
+            }
+        }
+    }, "brand enforcement");
+
 
     // ---- STYLE_RESTRUCTURE: scan unstyled paragraphs and propose new styles ----
     // Walks every paragraph in every story, fingerprints by font+size+leading+

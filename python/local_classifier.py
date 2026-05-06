@@ -1009,6 +1009,40 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
                             "_substitution": (marked, new_marked),
                         })
                         return edits, notes
+            # "Make this same size as other fields" / "match the size of"
+            # — emit SET_TEXT_SIZE_MATCH so the JSX side resizes the
+            # cell at the annotation's coords to the modal sibling
+            # pointSize. Runs before the Ollama fallback because this is
+            # a structured op the rule-based path can handle deterministic-
+            # ally; the LLM tends to invent a literal size value instead.
+            m_size_match = re.search(
+                r"\b(?:same|match(?:ing)?|matched)\s+(?:font\s+)?size\b"
+                r"|\bsize\s+to\s+match\b"
+                r"|\b(?:make|set)\s+(?:this|it)\s+(?:the\s+)?same\s+size\b",
+                content, re.I)
+            if m_size_match:
+                rect = annotation.get("rect") or []
+                page = annotation.get("page")
+                if page and len(rect) >= 4:
+                    cx = (rect[0] + rect[2]) / 2
+                    cy = (rect[1] + rect[3]) / 2
+                    edits.append({
+                        "op": "SET_TEXT_SIZE_MATCH",
+                        "target": {
+                            "page": page,
+                            "at_pdf_coords": [round(cx, 2), round(cy, 2)],
+                            "find": (marked or line_text or "").strip() or None,
+                        },
+                        "params": {},
+                        "confidence": 0.8,
+                        "rationale": (
+                            f"{atype} + 'same size as other fields' → "
+                            "resize target text to modal sibling pointSize"
+                        ),
+                        "source_annotation": content[:200],
+                    })
+                    return edits, notes
+
             # Fallback — when the highlight has verbose-instruction content
             # we don't have a hand-coded rule for, emit a HUMAN_REVIEW edit so
             # the Ollama escalation path picks it up. Without this, verbose
@@ -1128,6 +1162,175 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
                 "params": {},
                 "confidence": 0.85,
                 "rationale": f"'{content[:30]}...' instruction → remove page {page}",
+                "source_annotation": content[:200],
+            })
+            return edits, notes
+
+    # ---- Pattern: "make this same size as other fields" → SET_TEXT_SIZE_MATCH
+    # Sticky-note annotations asking the reviewer to bring a single
+    # mis-sized label/cell into line with the rest of the form. The
+    # JSX handler walks sibling cells in the same table and applies the
+    # modal pointSize, so Python only needs to detect the intent and
+    # forward the annotation's coords.
+    m_size_match = re.search(
+        r"\b(?:same|match(?:ing)?|matched)\s+(?:font\s+)?size\b"
+        r"|\bsize\s+to\s+match\b"
+        r"|\bmatch(?:ing)?\s+(?:the\s+)?(?:font\s+)?size\s+(?:of|to)\b"
+        r"|\bsame\s+(?:font\s+)?size\s+as\b"
+        r"|\b(?:make|set)\s+(?:this|it)\s+(?:the\s+)?same\s+size\b",
+        content, re.I)
+    if m_size_match:
+        rect = annotation.get("rect") or []
+        page = annotation.get("page")
+        if page and len(rect) >= 4:
+            cx = (rect[0] + rect[2]) / 2
+            cy = (rect[1] + rect[3]) / 2
+            edits.append({
+                "op": "SET_TEXT_SIZE_MATCH",
+                "target": {
+                    "page": page,
+                    "at_pdf_coords": [round(cx, 2), round(cy, 2)],
+                },
+                "params": {},
+                "confidence": 0.8,
+                "rationale": (
+                    "Matched 'same size as other fields' instruction → "
+                    "resize target cell to modal sibling pointSize"
+                ),
+                "source_annotation": content[:200],
+            })
+            return edits, notes
+
+    # ---- Pattern: cell-fill / text-color change → SET_CELL_FILL or SET_TEXT_COLOR
+    # Sticky-note annotations like "make this header gray", "change to white",
+    # or just "blue" near an element. We detect:
+    #   - Color spec in the comment (lexicon word, "light X" / "dark X",
+    #     "C=## M=## Y=## K=##" CMYK literal, or "#RRGGBB" hex)
+    #   - Element hint (text vs. cell/row/column) to choose the op
+    # The JSX side handles the actual color resolution at apply time —
+    # Python emits a plain color spec string and the JSX maps it to a
+    # Swatch via doc.swatches lookup, CMYK literal parse, hex parse, or
+    # a small color-word lexicon, in that order.
+    color_change = _detect_color_change(content)
+    if color_change:
+        rect = annotation.get("rect") or []
+        if len(rect) >= 4:
+            cx = (rect[0] + rect[2]) / 2
+            cy = (rect[1] + rect[3]) / 2
+            page = annotation.get("page")
+            if color_change.get("element_hint") == "text":
+                edits.append({
+                    "op": "SET_TEXT_COLOR",
+                    "target": {
+                        "page": page,
+                        "at_pdf_coords": [round(cx, 2), round(cy, 2)],
+                        "find": (annotation.get("line_text") or "").strip() or None,
+                    },
+                    "params": {"color": color_change["color_spec"]},
+                    "confidence": 0.78,
+                    "rationale": f"Matched color-change comment → set text color to {color_change['color_spec']}",
+                    "source_annotation": content[:200],
+                })
+                return edits, notes
+            edits.append({
+                "op": "SET_CELL_FILL",
+                "target": {
+                    "page": page,
+                    "at_pdf_coords": [round(cx, 2), round(cy, 2)],
+                    "scope": color_change.get("scope", "cell"),
+                },
+                "params": {"color": color_change["color_spec"]},
+                "confidence": 0.78,
+                "rationale": (f"Matched color-change comment → set "
+                              f"{color_change.get('scope', 'cell')} fill to "
+                              f"{color_change['color_spec']}"),
+                "source_annotation": content[:200],
+            })
+            return edits, notes
+
+    # ---- Pattern: table cell-edge stroke change → SET_CELL_STROKE
+    # Sticky-note annotations like "can we delete this black line?" or
+    # "remove this border" pointing at a column/row separator inside a
+    # table. The JSX side resolves the annotation's PDF coords to the
+    # nearest table + cell edge at apply time — we just emit the intent.
+    m_stroke = re.search(
+        r"\b(?:delete|remove|drop|kill|hide|get\s*rid\s*of)\b"
+        r"[\s\w]*?"
+        r"\b(?:line|rule|border|stroke|divider|separator)s?\b",
+        content, re.I)
+    m_recolor = None
+    if not m_stroke:
+        # "make/change this line gray" / "this border should be light gray"
+        m_recolor = re.search(
+            r"\b(?:line|rule|border|stroke|divider|separator)\b[\s\w]{0,40}?"
+            r"\b(?:to|into|in|should\s*be)\s+([A-Za-z][A-Za-z0-9 ]{1,30})",
+            content, re.I)
+    if m_stroke or m_recolor:
+        rect = annotation.get("rect") or []
+        if len(rect) >= 4:
+            cx = (rect[0] + rect[2]) / 2
+            cy = (rect[1] + rect[3]) / 2
+            # Orientation: the inspector exports columnEdges per table in
+            # spread/POINTS coords. If our annotation's X sits within a
+            # few points of an INTERNAL column edge, we know the reviewer
+            # is pointing at a vertical column separator — much more
+            # reliable than the JSX's frame-relative row-edge math (the
+            # frame may contain a title above the table, throwing off row
+            # offsets). If the comment names the orientation explicitly,
+            # honor that.
+            orient = None
+            if re.search(r"\bvertical\b", content, re.I):
+                orient = "vertical"
+            elif re.search(r"\bhorizontal\b", content, re.I):
+                orient = "horizontal"
+            if orient is None and doc_inspection:
+                ann_page = annotation.get("page")
+                tol_pt = 6.0
+                near_col_edge = False
+                for p_info in (doc_inspection.get("pages") or []):
+                    if p_info.get("page") != ann_page:
+                        continue
+                    for fr in (p_info.get("frames") or []):
+                        fb = fr.get("bounds") or []  # [y1, x1, y2, x2]
+                        if len(fb) < 4: continue
+                        # Only consider frames whose bounds (loose) contain cx,cy
+                        if not (fb[1] - 5 <= cx <= fb[3] + 5 and fb[0] - 5 <= cy <= fb[2] + 5):
+                            continue
+                        for tbl_info in (fr.get("tables") or []):
+                            edges = tbl_info.get("columnEdges") or []
+                            # Skip outer borders (index 0 and last)
+                            for ei in range(1, len(edges) - 1):
+                                if abs(cx - edges[ei]) <= tol_pt:
+                                    near_col_edge = True
+                                    break
+                            if near_col_edge: break
+                        if near_col_edge: break
+                    if near_col_edge: break
+                orient = "vertical" if near_col_edge else "auto"
+            if orient is None:
+                orient = "auto"
+            params = {"weight": 0}
+            if m_recolor:
+                # Recolor instead of delete — caller asked for a specific
+                # color. Match the captured name to a reasonable Swatch
+                # name; if it's a generic word we can't map, fall back to
+                # the literal string and let the JSX try doc.swatches.
+                color_word = m_recolor.group(1).strip().rstrip(".,;:")
+                params = {"weight": 0.25, "color": color_word}
+            edits.append({
+                "op": "SET_CELL_STROKE",
+                "target": {
+                    "page": annotation.get("page"),
+                    "at_pdf_coords": [round(cx, 2), round(cy, 2)],
+                    "orientation": orient,
+                },
+                "params": params,
+                "confidence": 0.8,
+                "rationale": (
+                    f"Matched '{('delete' if m_stroke else 'recolor')} "
+                    f"line/border' near table — "
+                    f"{('zero stroke weight' if m_stroke else 'recolor stroke')} "
+                    f"on the closest cell edge"),
                 "source_annotation": content[:200],
             })
             return edits, notes
@@ -1564,17 +1767,21 @@ def _build_fallback_targets(marked, replacement, line_text):
             am = re.match(r"\s*(\S+)", after)
             bw = bm.group(1) if bm else ""
             aw = am.group(1) if am else ""
-            # Single-char punctuation marks (`:`, `.`, `,`, `;`, `?`, `!`)
-            # use a LEFT-only context: the after-context word may be a
-            # form-field glyph (☐, ■) or other non-text run that lives in
-            # the same `line_text`, and including it as context can cause
-            # the GREP fallback to consume an adjacent checkbox alongside
-            # the punctuation we're trying to delete. Binding the find
-            # tightly to the preceding word ("property?" + ":") keeps the
-            # delete surgical without touching anything to the right.
-            is_punct_only = (len(marked) == 1 and not marked.isalnum() and
-                             marked in ".,;:!?")
-            if is_punct_only and bw:
+            # Single non-alphanumeric chars (`:`, `.`, `,`, `;`, `?`, `!`,
+            # `§`, `¶`, `†`, `‡`, `✓`, `★`, …) attach DIRECTLY to the
+            # preceding word with no whitespace ("Discounts§", "property:",
+            # "level."). Use a LEFT-only context with no space between
+            # bw and marked so the find string mirrors the actual text:
+            #   - ASCII punctuation: avoids consuming form-field glyphs
+            #     (☐, ■) on the right side via GREP fallback
+            #   - Symbols / dingbats: matches the real "word§" sequence
+            #     even when line_text reconstruction grafted on text from
+            #     a neighboring cell ("Incentive Unit Lighting Discounts§")
+            # `marked.isspace()` is excluded — we never want to bind
+            # whitespace to a preceding word.
+            is_attached_punct = (len(marked) == 1 and not marked.isalnum()
+                                 and not marked.isspace())
+            if is_attached_punct and bw:
                 ctx_find = bw + marked
                 ctx_replace = bw + replacement
                 if len(ctx_find) >= max(8, len(marked) + 4) and ctx_find != fb_find:
@@ -1587,6 +1794,117 @@ def _build_fallback_targets(marked, replacement, line_text):
                     fb2_find = ctx_find
                     fb2_replace = ctx_replace
     return fb_find, fb_replace, fb2_find, fb2_replace
+
+
+# Color-word lexicon for the color-change rule. Single words plus the
+# common modifier prefixes ("light X" / "dark X"). Brand swatch names
+# like "DTE Blue" aren't on this list — those resolve via doc.swatches
+# at apply time when the designer set them up in the source file.
+_COLOR_WORDS = {
+    "red", "blue", "green", "yellow", "orange", "purple", "violet", "pink",
+    "brown", "gray", "grey", "black", "white", "cyan", "magenta", "teal",
+    "gold", "silver", "navy", "maroon", "lime", "olive", "tan", "beige",
+}
+_COLOR_MODIFIERS = {"light", "dark", "bright", "deep", "pale"}
+_VERB_RE = re.compile(
+    r"\b(?:make|change|changed|set|recolor|recoloured|recolored|fill|filled|"
+    r"paint|painted|tint|tinted|swap|swapped"
+    r"|should\s+be|needs?\s+to\s+be|must\s+be|has\s+to\s+be|gotta\s+be"
+    r"|change\s+to|set\s+to|update\s+to|colou?r\s+to)\b",
+    re.I,
+)
+_CMYK_LITERAL_RE = re.compile(
+    r"\bC\s*=\s*(\d+)\s+M\s*=\s*(\d+)\s+Y\s*=\s*(\d+)\s+K\s*=\s*(\d+)\b",
+    re.I,
+)
+_HEX_LITERAL_RE = re.compile(r"#([0-9A-Fa-f]{6})\b")
+# Brand swatch tokens look like "DTE Blue" or "Pepco Purple" — capitalized
+# multi-word names where the LAST word is a basic color. Captured as-is
+# so the JSX swatch lookup gets the original casing.
+_BRAND_SWATCH_RE = re.compile(
+    r"\b([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+){0,2}\s+(?:Blue|Red|Green|Yellow|Purple|Orange|Pink|Black|White|Gray|Grey|Gold))\b"
+)
+
+
+def _detect_color_change(content):
+    """Detect a color-change intent in a sticky-note comment.
+
+    Returns a dict like {color_spec, element_hint, scope} on a hit, or
+    None when the comment isn't a color change. Tight matching — we
+    require either an explicit verb (make/change/set/etc.) OR a comment
+    that's basically just a color word, to avoid false-positives on
+    body-text edits like "this is too blue compared to..." which use
+    color words descriptively rather than as instructions.
+    """
+    if not content:
+        return None
+    text = content.strip()
+    if not text or len(text) > 120:
+        return None
+    lc = text.lower()
+
+    # 1. CMYK literal anywhere in the comment
+    cmyk = _CMYK_LITERAL_RE.search(text)
+    color_spec = None
+    if cmyk:
+        color_spec = f"C={int(cmyk.group(1))} M={int(cmyk.group(2))} Y={int(cmyk.group(3))} K={int(cmyk.group(4))}"
+    if not color_spec:
+        # 2. Hex literal
+        hx = _HEX_LITERAL_RE.search(text)
+        if hx:
+            color_spec = "#" + hx.group(1).upper()
+    if not color_spec:
+        # 3. Brand-style proper-noun swatch (preserve original casing)
+        b = _BRAND_SWATCH_RE.search(text)
+        if b:
+            color_spec = b.group(1).strip()
+    if not color_spec:
+        # 4. Modifier + color ("light gray", "dark blue") — single space
+        m_mod = re.search(
+            r"\b(" + "|".join(_COLOR_MODIFIERS) + r")\s+([a-z]+)\b",
+            lc,
+        )
+        if m_mod and m_mod.group(2) in _COLOR_WORDS:
+            color_spec = m_mod.group(1) + " " + m_mod.group(2)
+    if not color_spec:
+        # 5. Plain color word
+        for w in re.findall(r"\b([a-z]+)\b", lc):
+            if w in _COLOR_WORDS:
+                color_spec = w
+                break
+    if not color_spec:
+        return None
+
+    # Intent gate: must have an action verb OR be a color-only comment
+    # (the entire content is just the color phrase, possibly with a few
+    # filler words like "to" or "should be"). Prevents matching things
+    # like a long descriptive paragraph that happens to mention "blue".
+    has_verb = bool(_VERB_RE.search(text))
+    is_color_only = bool(re.match(
+        r"^\s*(?:to\s+|should\s+be\s+|needs\s+to\s+be\s+|=\s*)?"
+        + re.escape(color_spec) + r"\s*[.!]?\s*$",
+        text, re.I,
+    ))
+    if not (has_verb or is_color_only):
+        return None
+
+    # Element / scope hints
+    element_hint = None
+    scope = "cell"
+    if re.search(r"\b(text|font|type|letters?|characters?|words?)\b", lc):
+        element_hint = "text"
+    elif re.search(r"\brow\b", lc):
+        scope = "row"
+    elif re.search(r"\bcolumn\b", lc):
+        scope = "column"
+    elif re.search(r"\b(header|cell)\b", lc):
+        scope = "row"  # "header" usually means the whole header row
+
+    return {
+        "color_spec": color_spec,
+        "element_hint": element_hint,
+        "scope": scope,
+    }
 
 
 def _human_review(content, rationale):
@@ -1854,6 +2172,27 @@ def classify_edits_local(annotations, doc_inspection, reference_files=None):
         if idx in skip_indices:
             continue  # comment was paired with a StrikeOut — handled there
         edits, notes = classify_annotation(ann, doc_inspection, reference_files or [], column_types_by_table)
+        # Tag every REPLACE_TEXT this annotation produces with the
+        # annotation's page + rect-center so the JSX can scope find/
+        # replace to the text frame the reviewer actually drew on. A
+        # strike on "Mini" in one cell shouldn't trigger a doc-wide
+        # substitution if the same string appears in another template
+        # somewhere else in the doc — the JSX prefers the scoped frame
+        # and only falls through to doc-wide when the scoped find finds
+        # nothing.
+        ann_page = ann.get("page")
+        ann_rect = ann.get("rect") or []
+        if ann_page and len(ann_rect) >= 4:
+            ann_cx = round((ann_rect[0] + ann_rect[2]) / 2, 2)
+            ann_cy = round((ann_rect[1] + ann_rect[3]) / 2, 2)
+            for e in edits:
+                if e.get("op") != "REPLACE_TEXT":
+                    continue
+                target = e.setdefault("target", {})
+                if "page" not in target:
+                    target["page"] = ann_page
+                if "at_pdf_coords" not in target:
+                    target["at_pdf_coords"] = [ann_cx, ann_cy]
         all_edits.extend(edits)
         all_notes.extend(notes)
 
@@ -1887,6 +2226,34 @@ def classify_edits_local(annotations, doc_inspection, reference_files=None):
             key_parts.append(str(target.get("column", "")))
             key_parts.append(str((e.get("params") or {}).get("text", "")))
             key_parts.append(str((e.get("params") or {}).get("values", "")))
+        elif op in ("SET_CELL_FILL", "SET_TEXT_COLOR"):
+            # Two color-change comments at different points in the same
+            # doc must stay distinct. Key on coords + scope + color spec.
+            coords = target.get("at_pdf_coords") or []
+            cx = round(coords[0]) if len(coords) > 0 else ""
+            cy = round(coords[1]) if len(coords) > 1 else ""
+            key_parts.append(str(target.get("page", "")))
+            key_parts.append(f"{cx}x{cy}")
+            key_parts.append(target.get("scope", ""))
+            key_parts.append(target.get("find", "") or "")
+            key_parts.append((e.get("params") or {}).get("color", "") or "")
+        elif op == "SET_CELL_STROKE":
+            # Each "delete this line" sticky note typically points at a
+            # different column or row boundary, so keep them distinct
+            # by coordinate. Round to integer points to absorb tiny
+            # rect-center jitter from the PDF reader.
+            coords = target.get("at_pdf_coords") or []
+            cx = round(coords[0]) if len(coords) > 0 else ""
+            cy = round(coords[1]) if len(coords) > 1 else ""
+            key_parts.append(str(target.get("page", "")))
+            key_parts.append(f"{cx}x{cy}")
+            key_parts.append(target.get("orientation", ""))
+        elif op == "SET_TEXT_SIZE_MATCH":
+            coords = target.get("at_pdf_coords") or []
+            cx = round(coords[0]) if len(coords) > 0 else ""
+            cy = round(coords[1]) if len(coords) > 1 else ""
+            key_parts.append(str(target.get("page", "")))
+            key_parts.append(f"{cx}x{cy}")
         elif op == "RELINK_IMAGE":
             # Two annotations of the same swap (e.g. one sticky note per
             # page asking to swap the same logo) collapse to one edit

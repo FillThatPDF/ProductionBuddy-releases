@@ -553,18 +553,37 @@ def extract_annotations(pdf_path):
                         xs = [float(p[0]) for p in quad]
                         ys = [float(p[1]) for p in quad]
                         sub_rects.append((min(xs), min(ys), max(xs), max(ys)))
-                    # Prefer word-level extraction with a 50% bbox-overlap
-                    # rule. Two failure modes to balance:
+                    # Char-level fast path for single-letter strikes.
+                    # When the strike spans a SINGLE narrow region — e.g.
+                    # the user struck just the "M" of "Mini-split" — the
+                    # word-overlap pass below can over-capture (the strike
+                    # covers ~52% of the 4-letter "Mini" word's area, just
+                    # past the 50% threshold, so "Mini" gets pulled in
+                    # instead of "M"). Char-level extraction returns
+                    # exactly the chars whose bbox center sits in the
+                    # strike rect, which is the right grain for these
+                    # single-letter case fixes (the most common reviewer
+                    # pattern). Only short, contiguous results — 1–3 chars
+                    # with no whitespace — are trusted; anything longer
+                    # falls through to word-level which handles multi-word
+                    # phrase strikes correctly.
+                    if len(sub_rects) == 1:
+                        chars_only = text.get_chars_in_rect(page_idx, sub_rects[0]).strip()
+                        if (chars_only and 1 <= len(chars_only) <= 3
+                                and not any(ch.isspace() for ch in chars_only)):
+                            marked_text = chars_only
+                    # Word-level extraction with a 50% bbox-overlap rule.
+                    # Failure modes balanced:
                     #   - Center-inside-quad is too strict: a strike that
                     #     visually covers "bay fixtures" can leave "bay" out
                     #     if its center is barely past the quad's left edge.
-                    #   - pypdfium2's get_text_bounded is too leaky: a strike
+                    #   - PyMuPDF's get_text_in_rect is too leaky: a strike
                     #     on "upfront" returns "y upfront" because the rect
                     #     clips a tail glyph from an adjacent word.
                     # Requiring ≥ 50% of the word's area to overlap the quad
                     # catches words with a small overshoot and rejects words
                     # only partially clipped at the edge.
-                    if sub_rects:
+                    if not marked_text and sub_rects:
                         bits = []
                         for sr in sub_rects:
                             sx0, sy0, sx1, sy1 = sr
@@ -1243,6 +1262,37 @@ def main_create_hyperlinks(payload):
     log("[orchestrate] done — hyperlinks created")
 
 
+def main_brand_extract(payload):
+    """Parse a brand-guide PDF and write the extracted brand JSON to stdout.
+
+    Payload shape:
+      {
+        "mode": "brand_extract",
+        "pdfPath": "/path/to/Brand_Guide.pdf",
+        "suggestedName": "DTE"   (optional override; the user typed this
+                                  in the Save-as field)
+      }
+
+    Stdout: a JSON object with a `[brand_extract]` marker line first
+    (so main.js can scan for it amid the orchestrator's normal logging),
+    followed by the JSON payload on its own line.
+    """
+    sys.path.insert(0, str(HERE))
+    from brand_extractor import extract_brand_from_pdf
+
+    pdf_path = payload["pdfPath"]
+    suggested = (payload.get("suggestedName") or "").strip() or None
+    log(f"[orchestrate] brand_extract on {pdf_path}")
+    result = extract_brand_from_pdf(pdf_path, suggested_name=suggested)
+    log(f"[orchestrate]   detected name: {result.get('detectedName')}; "
+        f"swatches: {len(result.get('swatchSamples', []))}; "
+        f"fonts: {len(result.get('fonts', []))}")
+    # Emit the result as a single line prefixed with the marker so
+    # main.js can pluck it out of stdout deterministically.
+    print("[brand_extract] " + json.dumps(result), flush=True)
+    return 0
+
+
 def main_data_merge(payload):
     """Run the Excel → tagged-template → per-state .indd pipeline.
 
@@ -1391,6 +1441,8 @@ def _dispatch(payload, mode):
         return main_restructure_styles(payload)
     if mode == "create_hyperlinks":
         return main_create_hyperlinks(payload)
+    if mode == "brand_extract":
+        return main_brand_extract(payload)
 
     pdf_path = payload["pdfPath"]
     indd_path = payload["inddPath"]
@@ -1509,6 +1561,20 @@ def _dispatch(payload, mode):
     sys.path.insert(0, str(HERE))
     edits_plan = run_classifier_cascade(annotations, doc_inspection, ref_inventory, log, settings)
 
+    # Brand config is now passed in via `settings.brandConfig` from
+    # main.js, which owns the full brand-guide-in-memory workflow:
+    # the user picks a brand-guide PDF on tab 1, the app extracts
+    # swatches + fonts via the brand-extract sub-command of this
+    # orchestrator, persists the result under userData/brand-guides/,
+    # and on subsequent runs auto-loads the matching guide based on
+    # the input filename. The orchestrator just reads what main.js
+    # decided to use.
+    brand_config = settings.get("brandConfig") if settings else None
+    if brand_config:
+        log(f"[orchestrate]   using brand guide '{brand_config.get('name', 'unnamed')}' "
+            f"({len(brand_config.get('swatches', []))} swatches, "
+            f"{len(brand_config.get('fonts', []))} fonts)")
+
     # Write QA config for the JSX to consume
     qa_config_path = work_dir / "qa_config.json"
     qa_config_path.write_text(json.dumps({
@@ -1518,6 +1584,8 @@ def _dispatch(payload, mode):
         "disabled_checks": settings.get("disabledChecks", {}),
         "confidence":      settings.get("confidence", 0.6),
         "run_508_check":   bool(settings.get("run508Check", False)),
+        "body_auto_fit":   bool(settings.get("bodyAutoFit", False)),
+        "brand":           brand_config,
     }))
     edits_path.write_text(json.dumps(edits_plan, indent=2))
     log(f"[orchestrate]   {len(edits_plan.get('edits', []))} edit op(s), "

@@ -107,6 +107,20 @@ const FINDING_META = {
     severity: "warning",
     canAutoFix: false,
   },
+  BRAND_OFFCOLOR: {
+    title: "Off-brand swatch(es) used",
+    plain: "One or more swatches in the document aren't on the brand's approved palette (per brand.json next to the .indd or in any ancestor folder).",
+    fix: "Either swap each listed swatch for an approved brand swatch, or — if the use is intentional (one-off accent, photo-overlay, etc.) — add the swatch name to brand.json.",
+    severity: "warning",
+    canAutoFix: false,
+  },
+  BRAND_OFFFONT: {
+    title: "Off-brand font(s) in use",
+    plain: "One or more fonts in the document aren't on the brand's approved font list (per brand.json next to the .indd or in any ancestor folder).",
+    fix: "Either replace the listed font(s) with an approved brand font, or — if the use is intentional — add the family name to brand.json.",
+    severity: "warning",
+    canAutoFix: false,
+  },
   COLOR_RGB_SWATCH: {
     title: "RGB swatches in a print document",
     plain: "RGB colors will be converted at output and may shift visually. CMYK is the right space for print.",

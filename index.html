@@ -75,6 +75,23 @@
     </div>
 
     <div class="step">
+      <label>⑥ Brand guide <span class="optional">(optional)</span></label>
+      <p class="hint">A brand-guide PDF the app should enforce. The QA scan will flag any swatch or font in the document that isn't on the guide's approved list. If you check <em>Save to memory</em>, the parsed brand info is stored locally and auto-applied on future runs whose filename includes the brand name (e.g. any file with <code>DTE</code> in its name will reuse the saved <code>DTE</code> guide).</p>
+      <div class="pick-row">
+        <input id="brandGuidePath" type="text" readonly placeholder="No brand guide selected…" />
+        <button id="pickBrandGuide">Browse…</button>
+      </div>
+      <div class="pick-row" style="margin-top:8px; align-items:center; gap:14px;">
+        <label class="check-row" style="margin:0;">
+          <input type="checkbox" id="brandGuideSaveToMemory" />
+          <span>Save to memory</span>
+        </label>
+        <input id="brandGuideName" type="text" placeholder="Save as: (brand name)" style="flex:1; max-width:240px;" disabled />
+      </div>
+      <p class="hint" id="brandGuideStatus" style="display:none; margin-top:6px;"></p>
+    </div>
+
+    <div class="step">
       <label class="check-row">
         <input type="checkbox" id="run508Check" />
         <span>508 compliance check</span>
@@ -303,6 +320,12 @@
         </section>
 
         <section class="settings-section">
+          <h4>Saved brand guides</h4>
+          <p class="settings-hint">Brand guides you've added via the markup tab with <em>Save to memory</em> checked. Each guide is matched against new input filenames — if the input mentions one of the saved brand names, that guide's swatches and fonts are used to flag off-brand items in QA.</p>
+          <div id="brandGuidesList" class="ignored-list">No saved brand guides.</div>
+        </section>
+
+        <section class="settings-section">
           <h4>Ignored findings</h4>
           <p class="settings-hint">Findings with these IDs will be hidden in future runs.</p>
           <div id="ignoredList" class="ignored-list">No ignored findings.</div>
@@ -337,6 +360,23 @@
             <p class="settings-hint">The app will use rule-based matching only. Common edits (replace text, sort table, add row) still work; ambiguous notes will land in "Human Review" for you to handle. You can install Ollama later from the Settings panel.</p>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Brand-guide picker (multi-match disambiguator) -->
+  <div id="brandGuidePickerModal" class="modal-overlay hidden">
+    <div class="modal" style="max-width: 520px">
+      <div class="modal-head">
+        <h2>Pick a brand guide</h2>
+      </div>
+      <div class="modal-body">
+        <p class="settings-hint" id="brandGuidePickerIntro">More than one saved brand guide matches this file's name. Pick one to apply, or skip to run without brand enforcement.</p>
+        <div id="brandGuidePickerList" class="ignored-list" style="margin-top:12px;"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="ghost" id="brandGuidePickerSkip">Skip — no brand check</button>
+        <button class="primary" id="brandGuidePickerConfirm" disabled>Use selected</button>
       </div>
     </div>
   </div>
