@@ -3196,6 +3196,59 @@
         }
         applyNoBreak("[\\w._%+-]+@[\\w.-]+\\.[A-Za-z]{2,}", "emails");
         applyNoBreak("https?://[\\S]+", "URLs");
+
+        // Hyphenated compound words that were INTRODUCED by a
+        // REPLACE_TEXT edit ("wellbeing" → "well-being",
+        // "state level" → "state-level", etc.) often end up
+        // breaking across lines on the new hyphen — InDesign treats
+        // a regular `-` as a break opportunity. The reviewer
+        // explicitly asked for the hyphenation, so the compound is
+        // semantic and should stay together. Build the set of
+        // "newly-introduced" hyphen tokens by diffing each edit's
+        // replace_with against its find: any \w+-\w+ token in the
+        // replace that's NOT in the find is a fresh hyphenation,
+        // and we apply noBreak to all its occurrences in the doc.
+        // Pre-existing hyphenated text the designer composed
+        // intentionally (e.g. line-end soft hyphenation) is left
+        // alone because those tokens already appear in `find`
+        // unchanged.
+        var newHyphenTokens = {};
+        try {
+            for (var ehi = 0; ehi < editPlan.edits.length; ehi++) {
+                var ehe = editPlan.edits[ehi];
+                if (ehe.op !== "REPLACE_TEXT") continue;
+                var ehFind = (ehe.target && ehe.target.find) || "";
+                var ehRepl = (ehe.params && ehe.params.replace_with) || "";
+                if (!ehRepl) continue;
+                // Match standalone hyphenated compounds. \w+-\w+ is
+                // greedy enough for "well-being" but won't gobble
+                // sentence punctuation on either side.
+                var hyphenRe = /\b[A-Za-z]+-[A-Za-z]+\b/g;
+                var rm;
+                while ((rm = hyphenRe.exec(ehRepl)) !== null) {
+                    var token = rm[0];
+                    if (String(ehFind).indexOf(token) >= 0) continue;
+                    newHyphenTokens[token] = true;
+                }
+            }
+        } catch (e) {}
+        var hyphenList = [];
+        for (var ehk in newHyphenTokens) hyphenList.push(ehk);
+        if (hyphenList.length > 0) {
+            // Build one alternation pattern so we do a single doc-
+            // wide scan instead of one per token. Escape each token
+            // for GREP literal matching — the only metachar that
+            // can appear in a hyphenated word here is `-`, which is
+            // literal outside character classes, so no escaping is
+            // strictly required, but we add it for safety.
+            var grepEscape = function (s) {
+                return s.replace(/[\.\^\$\*\+\?\(\)\[\]\{\}\|\\]/g, "\\$&");
+            };
+            var alt = [];
+            for (var hli = 0; hli < hyphenList.length; hli++) alt.push(grepEscape(hyphenList[hli]));
+            applyNoBreak("\\b(?:" + alt.join("|") + ")\\b",
+                         "introduced hyphen-compounds (" + hyphenList.slice(0, 5).join(", ") + ")");
+        }
     }, "3f email/URL noBreak");
 
     // 3g: Body-copy auto-fit when a modified story now overflows.
@@ -3693,9 +3746,48 @@
             } catch (e) {}
             apFontName = (apFontName || "").replace(/\s+/g, "");
             if (apFontName && apFontName.toLowerCase() !== "undefined") continue;
+
+            // Infer fontStyle from the character style's NAME if possible.
+            // A style named "bold" / "italic" / "bold italic" / "regular"
+            // clearly intends to apply that weight or slant on top of the
+            // paragraph style's family — overwriting fontStyle to the
+            // dominant body weight (Regular) used to wipe these out
+            // doc-wide. We now only set fontStyle when:
+            //   (a) the name has a style hint, in which case we honor it
+            //   (b) AND the style currently has no explicit fontStyle
+            //       set on its own (we never overwrite an explicit
+            //       fontStyle).
+            // Styles without a name hint keep whatever fontStyle they
+            // had (often empty → inherits from paragraph style, which
+            // is fine since we're only fixing the FAMILY).
+            var lcName = csName.toLowerCase();
+            var nameStyleHint = null;
+            if (/bold\s*italic|italic\s*bold/.test(lcName)) {
+                nameStyleHint = "Bold Italic";
+            } else if (/\bbold\b/.test(lcName)) {
+                nameStyleHint = "Bold";
+            } else if (/\bitalic\b|\boblique\b/.test(lcName)) {
+                nameStyleHint = "Italic";
+            } else if (/\bregular\b|\broman\b/.test(lcName)) {
+                nameStyleHint = "Regular";
+            }
+            // Read the current fontStyle (may be empty → inherits).
+            var curFontStyle = "";
+            try { curFontStyle = String(cs.fontStyle || ""); } catch (e) {}
             try {
                 cs.appliedFont = dominant.font;
-                cs.fontStyle  = dominant.style;
+                // Only set fontStyle if (a) we have a name-derived hint
+                // AND (b) the current fontStyle is empty/unset. If the
+                // style already has an explicit fontStyle, leave it
+                // alone — that's the user's intent.
+                if (nameStyleHint && !curFontStyle) {
+                    try { cs.fontStyle = nameStyleHint; } catch (e) {
+                        // The exact style name might not exist for this
+                        // family (e.g. some fonts use "Heavy" instead of
+                        // "Bold"). Leave fontStyle alone in that case —
+                        // safer than picking a wrong default.
+                    }
+                }
                 fixed++;
                 fixedNames.push(csName);
             } catch (e) {
@@ -3705,7 +3797,8 @@
         if (fixed > 0) {
             FINDING("info", "STYLE_FONTLESS_CHAR_STYLE", "fonts", "doc",
                 "Auto-fixed " + fixed + " character style(s) with empty Font Family → " +
-                dominant.font + " " + dominant.style + ": " + fixedNames.slice(0, 8).join(", "),
+                dominant.font + " (font family only; fontStyle preserved per style): " +
+                fixedNames.slice(0, 8).join(", "),
                 true);
         }
     }, "fontless character styles");

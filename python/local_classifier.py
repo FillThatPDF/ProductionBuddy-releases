@@ -282,15 +282,14 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
                     "source_annotation": f"[Caret on page {annotation.get('page')}]",
                 })
                 return edits, notes
-            # No 4+ digit number nearby — the user's intent is unclear (we
-            # can't see the actual cell the caret was placed in), so don't
-            # guess and corrupt unrelated text.
-            edits.append(_human_review(
-                f"Comma caret near '{nearby}' — couldn't locate a 4+ digit "
-                f"number to format with thousands separator. Line: '{line_text[:120]}'. "
-                f"Place the comma manually.",
-                "Comma caret with no clear currency context"))
-            return edits, notes
+            # No 4+ digit number nearby — the thousands-separator
+            # hypothesis doesn't fit. Fall through to the general
+            # Caret-insert path below: a literal comma after the
+            # nearby word ("programs," / "HMRF,") is the second-most
+            # common reviewer intent. The general handler validates
+            # nearby_text against line_text before acting, so an
+            # ambiguous case (no nearby word) still ends up in
+            # HUMAN_REVIEW via the is_actionable filter further down.
 
         if nearby and line_text and nearby in line_text:
             # If the inserted content starts with a letter, digit, or opening
@@ -318,17 +317,28 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
                         line_text, count=1)
                     if n_subs > 0:
                         new_line = candidate
+            sub_marked = sub_repl = None
             if new_line is None:
                 new_line = line_text.replace(nearby, nearby + insert_str, 1)
+                # Substitution metadata for the same-line merger: lets
+                # multiple carets on the same line ("insert , after
+                # programs" + "insert , after HMRF") combine into one
+                # merged edit so each caret's replacement applies in
+                # turn rather than the second's find going stale.
+                sub_marked = nearby
+                sub_repl = nearby + insert_str
             if new_line != line_text:
-                edits.append({
+                edit = {
                     "op": "REPLACE_TEXT",
                     "target": {"find": line_text},
                     "params": {"replace_with": new_line},
                     "confidence": 0.85,
                     "rationale": f"Caret + content → insert '{content[:40]}' near '{nearby[:40]}'",
                     "source_annotation": f"[Caret on page {annotation.get('page')}]",
-                })
+                }
+                if sub_marked is not None and sub_repl is not None:
+                    edit["_substitution"] = (sub_marked, sub_repl)
+                edits.append(edit)
                 return edits, notes
     # Whitespace-only strike: the reviewer struck through one of two
     # adjacent space characters to delete the redundant one. extract_annotations
@@ -503,12 +513,123 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
                     "Ambiguous single-letter case fix"))
                 return edits, notes
 
+            # When the marked phrase is unique enough on its own (≥3
+            # words AND ≥15 chars AND has alphanumerics), emit a tightly
+            # scoped edit using marked as the primary find. Avoids two
+            # pitfalls of the line-scoped approach:
+            #   1. _merge_same_line_replace_edits combines multiple
+            #      same-line edits into one big REPLACE_TEXT — and when
+            #      that big find spans an inline hyperlink between the
+            #      substitutions, InDesign's changeText destroys the
+            #      hyperlink span (rewrites the whole found range as new
+            #      text, losing the hyperlink anchor).
+            #   2. line_text reconstruction errors when the PDF's line
+            #      breaks don't match InDesign's exactly.
+            # Page-scoped (target.page + at_pdf_coords are tagged later)
+            # so the find runs only in the frame at the strike's location,
+            # not doc-wide.
+            is_unique_phrase = (
+                marked
+                and len(marked) >= 15
+                and len(marked.split()) >= 3
+                and any(ch.isalnum() for ch in marked)
+            )
+            if replacement and is_unique_phrase:
+                edits.append({
+                    "op": "REPLACE_TEXT",
+                    "target": {"find": marked},
+                    "params": {"replace_with": replacement},
+                    "confidence": 0.9,
+                    "rationale": f"Strikethrough + comment → replace '{marked[:40]}' with '{replacement[:40]}'",
+                    "source_annotation": f"[StrikeOut+Comment on page {annotation.get('page')}]",
+                    # No _substitution metadata — keeps this edit out of
+                    # the same-line merger, so it can't combine with
+                    # other unique-phrase edits to span a hyperlink.
+                })
+                return edits, notes
+
             # Paired-with-comment path: reviewer convention is "replace the
             # struck-out text with the comment". Emit ONE scoped replace
             # using line_text as the find anchor. The `_substitution`
             # metadata lets _merge_same_line_replace_edits combine multiple
             # edits on the same line later.
             if replacement and line_text and marked in line_text:
+                # When marked appears multiple times on the line, use the
+                # `marked_occurrence` (0-based, set by extract_annotations)
+                # to pick the right one AND build a shorter context-anchored
+                # find that doesn't span the rest of the line. Spanning the
+                # whole line in the find caused two bugs:
+                #   - "first occurrence" mis-replacement when the strike was
+                #     on the second occurrence (`replace(..., count=1)`
+                #     always picked the first)
+                #   - bold formatting loss on the prefix outside the
+                #     marked region — InDesign's changeText flattens
+                #     formatting on the entire matched range.
+                # The disambiguating context is built by extending word-by-
+                # word until the candidate substring occurs exactly once in
+                # the line.
+                marked_occ = int(annotation.get("marked_occurrence") or 0)
+                line_count = line_text.count(marked)
+                disamb_find = disamb_replace = None
+                if line_count > 1 and 0 <= marked_occ < line_count:
+                    # Walk to the marked_occ-th occurrence
+                    pos = -1
+                    search_from = 0
+                    for _ in range(marked_occ + 1):
+                        pos = line_text.find(marked, search_from)
+                        if pos < 0: break
+                        search_from = pos + len(marked)
+                    if pos >= 0:
+                        # Try marked + N words after, increasing N until the
+                        # candidate is unique in line_text.
+                        for n_after in range(1, 6):
+                            rest = line_text[pos + len(marked):]
+                            wm = re.match(r"((?:\s*\S+){" + str(n_after) + r"})", rest)
+                            if not wm: break
+                            suffix = rest[:wm.end()]
+                            cand = marked + suffix
+                            if line_text.count(cand) == 1:
+                                disamb_find = cand
+                                disamb_replace = replacement + suffix
+                                break
+                        # If suffix didn't disambiguate (e.g. last word on
+                        # line), try N words before.
+                        if not disamb_find:
+                            for n_before in range(1, 6):
+                                before = line_text[:pos]
+                                wm = re.search(r"((?:\S+\s*){" + str(n_before) + r"})\Z", before)
+                                if not wm: break
+                                prefix = wm.group(1)
+                                cand = prefix + marked
+                                if line_text.count(cand) == 1:
+                                    disamb_find = cand
+                                    disamb_replace = prefix + replacement
+                                    break
+                if disamb_find:
+                    # Tight find/replace — only the disambiguating chunk is
+                    # rewritten by changeText, so any bold prefix outside it
+                    # is left alone.
+                    fb_find, fb_replace, fb2_find, fb2_replace = _build_fallback_targets(marked, replacement, line_text)
+                    edit = {
+                        "op": "REPLACE_TEXT",
+                        "target": {"find": disamb_find},
+                        "params": {"replace_with": disamb_replace},
+                        "confidence": 0.9,
+                        "rationale": (f"Strikethrough + comment → replace '{marked[:40]}' "
+                                      f"with '{replacement[:40]}' (occurrence #{marked_occ + 1} "
+                                      f"of {line_count}, disambiguated)"),
+                        "source_annotation": f"[StrikeOut+Comment on page {annotation.get('page')}]",
+                        # No _substitution metadata: the find is already a
+                        # tight unique substring, so we don't want it merged
+                        # with other same-line edits (which would re-broaden
+                        # the find back to line_text).
+                    }
+                    if fb_find: edit["target"]["fallback_find"] = fb_find
+                    if fb_replace is not None: edit["params"]["fallback_replace_with"] = fb_replace
+                    edits.append(edit)
+                    return edits, notes
+                # Single occurrence (or could not disambiguate) — fall back
+                # to the line-scoped find/replace as before.
                 new_line = line_text.replace(marked, replacement, 1)
                 new_line = re.sub(r"\s{2,}", " ", new_line).strip()
                 fb_find, fb_replace, fb2_find, fb2_replace = _build_fallback_targets(marked, replacement, line_text)

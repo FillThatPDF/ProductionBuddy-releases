@@ -742,6 +742,31 @@ def extract_annotations(pdf_path):
                                 break
 
                     if marked_text:
+                        # Disambiguate which occurrence of marked_text in
+                        # line_text was actually struck. When line_text
+                        # contains the same word twice ("Prosocial behavior.
+                        # Prosocial behaviors..."), the classifier's
+                        # `line_text.replace(marked, ...)` would always hit
+                        # the first occurrence, even when the strike was on
+                        # the second. We attach a 0-based occurrence index
+                        # by counting how many words on the same baseline
+                        # match `marked_text` and lie strictly LEFT of the
+                        # strike's left edge.
+                        marked_occurrence = 0
+                        try:
+                            if sl_line_text and marked_text and sl_line_text.count(marked_text) > 1:
+                                strike_left_x = rx0
+                                strike_y_mid = (ry0 + ry1) / 2
+                                for w in words:
+                                    wcy = (w["y0"] + w["y1"]) / 2
+                                    if abs(wcy - strike_y_mid) > 4:
+                                        continue
+                                    if w["text"] != marked_text:
+                                        continue
+                                    if w["x1"] <= strike_left_x:
+                                        marked_occurrence += 1
+                        except Exception:
+                            marked_occurrence = 0
                         ann_record = {
                             "page": page_idx + 1,
                             "rect": [round(x, 2) for x in r],
@@ -764,6 +789,7 @@ def extract_annotations(pdf_path):
                             "nearby_text": None,
                             "nearby_rect": None,
                             "line_text": sl_line_text,
+                            "marked_occurrence": marked_occurrence,
                         }
                         if whitespace_strike_context:
                             ann_record["whitespace_strike_context"] = whitespace_strike_context
