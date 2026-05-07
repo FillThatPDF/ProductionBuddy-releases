@@ -1043,6 +1043,115 @@ def classify_annotation(annotation, doc_inspection, reference_files, column_type
                     })
                     return edits, notes
 
+            # "Remove bold from this en dash" / "make this regular" /
+            # "unbold" / "make bold" / "make this italic" / "remove italic"
+            # — emit SET_TEXT_STYLE with the action (add/remove bold/italic)
+            # and the actual marked text as the restyle target. JSX scopes
+            # to the page+coords and applies fontStyle.
+            #
+            # Detection is keyword-anchored so the regex can't accidentally
+            # absorb the existing case-change ("uppercase" / "lowercase" /
+            # "title case") or color-change patterns above. Order matters:
+            # check the explicit "remove bold" / "remove italic" forms
+            # before the generic "make bold" / "make italic" forms (a
+            # comment containing both would be ambiguous; let the LLM
+            # handle it instead).
+            m_style = None
+            style_action = None
+            if re.search(r"\b(?:remove|strip|drop|delete|kill|no)\s+(?:the\s+)?bold\b|\b(?:make|set)\s+(?:this|it|that)\s+(?:to\s+)?regular\b|\bunbold\b", content, re.I):
+                m_style = True; style_action = "remove_bold"
+            elif re.search(r"\b(?:remove|strip|drop|delete|kill|no)\s+(?:the\s+)?italic(?:s)?\b|\bunitalic\b", content, re.I):
+                m_style = True; style_action = "remove_italic"
+            elif re.search(r"\b(?:make|set|add|bold(?:\s*ify)?)\s+(?:this|it|that)?\s*(?:to\s+)?(?:be\s+)?bold\b", content, re.I):
+                m_style = True; style_action = "add_bold"
+            elif re.search(r"\b(?:make|set|add|italic(?:\s*ize)?)\s+(?:this|it|that)?\s*(?:to\s+)?(?:be\s+)?italic(?:s)?\b", content, re.I):
+                m_style = True; style_action = "add_italic"
+
+            if m_style and marked:
+                rect = annotation.get("rect") or []
+                page = annotation.get("page")
+                cx = (rect[0] + rect[2]) / 2 if len(rect) >= 4 else None
+                cy = (rect[1] + rect[3]) / 2 if len(rect) >= 4 else None
+                tgt = {"find": marked, "line_text": line_text or None}
+                if page: tgt["page"] = page
+                if cx is not None and cy is not None:
+                    tgt["at_pdf_coords"] = [round(cx, 2), round(cy, 2)]
+                edits.append({
+                    "op": "SET_TEXT_STYLE",
+                    "target": tgt,
+                    "params": {"action": style_action},
+                    "confidence": 0.85,
+                    "rationale": (
+                        f"{atype} + '{style_action.replace('_', ' ')}' "
+                        f"instruction → restyle '{marked[:30]}'"
+                    ),
+                    "source_annotation": f"[{atype} on page {annotation.get('page')}] '{content[:80]}'",
+                })
+                return edits, notes
+
+            # "Move <word> down to next line" / "wrap <word> to next line"
+            # / "break before <word>" — emit a REPLACE_TEXT that prepends
+            # a forced line break ( ) before the target word. We
+            # anchor the find on the WORD-BEFORE + target so the edit
+            # only fires once at the actual location (not every
+            # occurrence of the target word doc-wide). LLMs handle this
+            # poorly — they often hallucinate a casing change instead.
+            m_break_before = re.search(
+                r"\bmove\s+([A-Za-z][\w-]*)\s+(?:down\s+)?(?:to\s+)?(?:the\s+)?next\s+line\b"
+                r"|\bwrap\s+([A-Za-z][\w-]*)\s+(?:to\s+)?(?:the\s+)?next\s+line\b"
+                r"|\bbreak\s+(?:line\s+)?before\s+([A-Za-z][\w-]*)\b"
+                r"|\bnew\s+line\s+before\s+([A-Za-z][\w-]*)\b",
+                content, re.I)
+            if m_break_before:
+                target_word = (m_break_before.group(1) or m_break_before.group(2)
+                               or m_break_before.group(3) or m_break_before.group(4) or "").strip()
+                if target_word and line_text:
+                    # Capture as much context BEFORE the target as possible
+                    # (1-4 words). A 1-word anchor like "the ENERGY" can
+                    # match every "the ENERGY STAR" on the page; a 4-word
+                    # anchor like "or exceed the ENERGY" is nearly always
+                    # unique within a body paragraph.
+                    multi_anchor = re.compile(
+                        r"((?:\S+\s+){1,4})" + re.escape(target_word) + r"\b",
+                        re.I)
+                    am = multi_anchor.search(line_text)
+                    if am:
+                        prefix = am.group(1)
+                        actual_target = line_text[am.end() - len(target_word):am.end()]
+                        # changeGrep with a literal "\n" token in the
+                        # replacement is the reliable way to insert a
+                        # forced line break — InDesign's GREP engine
+                        # treats "\n" as the special-character code for
+                        # forced-line-break. (U+2028 inserted via
+                        # changeText doesn't always trigger the body
+                        # composer to actually break.)
+                        # Build regex from word splits so spaces become \s+ (which
+                        # the GREP engine understands) instead of "\ "
+                        # (which Python's re.escape produces but InDesign's
+                        # GREP engine may reject).
+                        words_before = prefix.rstrip().split()
+                        find_grep = r"\s+".join(re.escape(w) for w in words_before) + r"\s+" + re.escape(actual_target)
+                        # Python source "\\n" → Python string r"\n" (2
+                        # chars: backslash + n). JSON serialises as
+                        # "\\n", eval gives back "\n" — the literal
+                        # 2-char sequence the GREP engine recognises.
+                        replace_grep = prefix.rstrip() + "\\n" + actual_target
+                        edits.append({
+                            "op": "REPLACE_TEXT",
+                            "target": {"find": find_grep},
+                            "params": {
+                                "replace_with": replace_grep,
+                                "is_regex": True,
+                            },
+                            "confidence": 0.85,
+                            "rationale": (
+                                f"{atype} + 'move {target_word} to next line' "
+                                f"→ GREP insert forced line break before '{target_word}'"
+                            ),
+                            "source_annotation": f"[{atype} on page {annotation.get('page')}] '{content[:80]}'",
+                        })
+                        return edits, notes
+
             # Fallback — when the highlight has verbose-instruction content
             # we don't have a hand-coded rule for, emit a HUMAN_REVIEW edit so
             # the Ollama escalation path picks it up. Without this, verbose
@@ -2254,6 +2363,14 @@ def classify_edits_local(annotations, doc_inspection, reference_files=None):
             cy = round(coords[1]) if len(coords) > 1 else ""
             key_parts.append(str(target.get("page", "")))
             key_parts.append(f"{cx}x{cy}")
+        elif op == "SET_TEXT_STYLE":
+            coords = target.get("at_pdf_coords") or []
+            cx = round(coords[0]) if len(coords) > 0 else ""
+            cy = round(coords[1]) if len(coords) > 1 else ""
+            key_parts.append(str(target.get("page", "")))
+            key_parts.append(f"{cx}x{cy}")
+            key_parts.append(target.get("find", "") or "")
+            key_parts.append((e.get("params") or {}).get("action", "") or "")
         elif op == "RELINK_IMAGE":
             # Two annotations of the same swap (e.g. one sticky note per
             # page asking to swap the same logo) collapse to one edit

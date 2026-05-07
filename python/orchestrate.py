@@ -336,6 +336,20 @@ def _refine_annotations_with_cell_geometry(annotations, doc_inspection, pdf_path
             continue
         new_line = _line_text_around(words, cx, cy, x_clip=(cell_x0, cell_x1))
         if new_line and new_line != ann.get("line_text"):
+            # Guard: don't apply the refinement if it would drop the
+            # annotation's anchor text. That's almost always a sign the
+            # annotation isn't actually inside the table — most commonly
+            # the X falls within the table's column-edge range but the Y
+            # is in body text above or below the table. The frame's
+            # vertical bounds are too coarse to distinguish those (a
+            # frame can wrap a table plus body text in the same story).
+            # Reverting to the unclipped line_text for these cases keeps
+            # downstream classifiers (Caret + content insert, scoped
+            # replace, etc.) working correctly.
+            nearby = (ann.get("nearby_text") or "").strip()
+            old_line = ann.get("line_text") or ""
+            if nearby and nearby in old_line and nearby not in new_line:
+                continue
             ann["line_text"] = new_line
             refined += 1
     return refined

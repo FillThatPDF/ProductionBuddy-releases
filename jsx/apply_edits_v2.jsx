@@ -1147,6 +1147,133 @@
             return;
         }
 
+        if (op === "SET_TEXT_STYLE") {
+            // Toggle bold / italic on the marked text. Action is one of:
+            //   remove_bold, add_bold, remove_italic, add_italic.
+            // Scoping: locate the cell or frame at the annotation coords,
+            // then findText(marked) within that scope. Pick the hit whose
+            // baseline is closest to the annotation Y (so a "remove bold"
+            // on a single en-dash doesn't restyle every en-dash in scope).
+            // Apply via the Text.fontStyle property — using a few common
+            // style-name variants because not every font family follows
+            // Adobe's "Bold / Italic / Bold Italic" convention.
+            var stTarget = edit.target || {};
+            var stFind = stTarget.find;
+            var stPage = stTarget.page;
+            var stCoords = stTarget.at_pdf_coords;
+            var stAction = (edit.params && edit.params.action) || "";
+            if (!stFind || !stAction) {
+                FLAG("SET_TEXT_STYLE: missing target.find or params.action");
+                return;
+            }
+            // Build the search scope (cell at coords > frame at coords > doc).
+            var stScope = null;
+            if (stPage && stCoords && stCoords.length >= 2) {
+                var stCell = findCellAtCoords(stPage, stCoords[0], stCoords[1]);
+                if (stCell) {
+                    stScope = stCell;
+                } else {
+                    try {
+                        var stPageObj = doc.pages[stPage - 1];
+                        if (stPageObj) {
+                            for (var stFi = 0; stFi < stPageObj.textFrames.length; stFi++) {
+                                var stTf = stPageObj.textFrames[stFi];
+                                var stFb = null;
+                                try { stFb = stTf.geometricBounds; } catch (e) {}
+                                if (!stFb || stFb.length < 4) continue;
+                                if (stCoords[0] >= stFb[1] - 5 && stCoords[0] <= stFb[3] + 5 &&
+                                    stCoords[1] >= stFb[0] - 5 && stCoords[1] <= stFb[2] + 5) {
+                                    stScope = stTf;
+                                    break;
+                                }
+                            }
+                        }
+                    } catch (e) {}
+                }
+            }
+            if (!stScope) stScope = doc;
+
+            // Find every hit; pick the one closest to the annotation Y.
+            app.findTextPreferences = NothingEnum.NOTHING;
+            app.changeTextPreferences = NothingEnum.NOTHING;
+            app.findTextPreferences.findWhat = stFind;
+            var stHits = [];
+            try { stHits = stScope.findText(); } catch (e) {}
+            app.findTextPreferences = NothingEnum.NOTHING;
+            if (!stHits || stHits.length === 0) {
+                // Doc-wide retry — scope might've been wrong
+                if (stScope !== doc) {
+                    app.findTextPreferences = NothingEnum.NOTHING;
+                    app.findTextPreferences.findWhat = stFind;
+                    try { stHits = doc.findText(); } catch (e) {}
+                    app.findTextPreferences = NothingEnum.NOTHING;
+                }
+            }
+            if (!stHits || stHits.length === 0) {
+                FLAG("SET_TEXT_STYLE: no match for find=\"" + stFind + "\"");
+                return;
+            }
+            // Pick the hit whose first-line baseline is closest to the
+            // annotation Y. Falls back to first hit if no baselines.
+            var stChosen = null;
+            if (stCoords && stCoords.length >= 2) {
+                var stBest = Number.MAX_VALUE;
+                for (var sh = 0; sh < stHits.length; sh++) {
+                    var hb = -1;
+                    try { hb = stHits[sh].lines[0].baseline; } catch (e) {}
+                    if (hb < 0) continue;
+                    var d = Math.abs(hb - stCoords[1]);
+                    if (d < stBest) { stBest = d; stChosen = stHits[sh]; }
+                }
+            }
+            if (!stChosen) stChosen = stHits[0];
+
+            // Resolve the new fontStyle string. Read current state, flip
+            // the bold/italic flag according to stAction, then build the
+            // new style name.
+            var curStyle = "Regular";
+            try { curStyle = String(stChosen.fontStyle || "Regular"); } catch (e) {}
+            var hasBold = /bold|black|heavy/i.test(curStyle);
+            var hasItalic = /italic|oblique/i.test(curStyle);
+            if (stAction === "remove_bold") hasBold = false;
+            else if (stAction === "add_bold") hasBold = true;
+            else if (stAction === "remove_italic") hasItalic = false;
+            else if (stAction === "add_italic") hasItalic = true;
+
+            // Try a few common naming conventions in priority order.
+            // Most fonts use "Regular / Bold / Italic / Bold Italic" but
+            // some (e.g. Adobe Garamond) use "Roman" or have non-standard
+            // bold weights. We probe by attempting to set fontStyle and
+            // catching the error from changeTextPreferences validation.
+            var candidates = [];
+            if (hasBold && hasItalic) {
+                candidates = ["Bold Italic", "Bold Oblique", "Black Italic", "Heavy Italic"];
+            } else if (hasBold) {
+                candidates = ["Bold", "Black", "Heavy", "Semibold"];
+            } else if (hasItalic) {
+                candidates = ["Italic", "Oblique", "Book Italic", "Roman Italic"];
+            } else {
+                candidates = ["Regular", "Roman", "Book", "Normal"];
+            }
+            var applied = null;
+            for (var ci = 0; ci < candidates.length; ci++) {
+                try {
+                    stChosen.fontStyle = candidates[ci];
+                    applied = candidates[ci];
+                    break;
+                } catch (e) {}
+            }
+            if (applied) {
+                L("  SET_TEXT_STYLE: \"" + stFind + "\" " + curStyle +
+                  " → " + applied + " (action=" + stAction + ")");
+            } else {
+                FLAG("SET_TEXT_STYLE: no compatible fontStyle for action=" +
+                     stAction + " on \"" + stFind + "\" (current=" + curStyle +
+                     ", tried [" + candidates.join(", ") + "])");
+            }
+            return;
+        }
+
         if (op === "SET_TEXT_SIZE_MATCH") {
             // "Make this text same size as other fields." Two paths:
             //   (1) Cell path — annotation lands in a real table cell.
@@ -2209,6 +2336,81 @@
                 // edit) throws "Object is invalid" and aborts the whole
                 // edit. On failure, fall back to the doc-wide scope so
                 // the edit still has a chance.
+                // Bold-boundary preservation probe. Form-label edits
+                // like "Invoice for installed – Installation cost..."
+                // → "Invoice for installed measures – Labor..." span a
+                // bold→regular transition at " – ". InDesign's changeText
+                // can drop the bold on the NEW chars added before the
+                // dash (e.g. " measures" inserted into "installed " stays
+                // regular even though the surrounding "installed" is
+                // bold). We probe the original find for the bold run's
+                // exact start/end, then re-apply bold to the
+                // corresponding range in the new text after changeText.
+                var styleBoundary = null;
+                var EN_DASH_PAT = " \u2013 ";  // space + en dash (U+2013) + space — \u escape so ExtendScript interprets the codepoint correctly regardless of source-file encoding
+                var findDashIdx = String(find).indexOf(EN_DASH_PAT);
+                var replaceDashIdx = String(replace || "").indexOf(EN_DASH_PAT);
+                if (findDashIdx > 0 && replaceDashIdx > 0) {
+                    app.findTextPreferences = NothingEnum.NOTHING;
+                    app.findTextPreferences.findWhat = find;
+                    var probeHits = [];
+                    try { probeHits = searchScope.findText(); } catch (e) {}
+                    app.findTextPreferences = NothingEnum.NOTHING;
+                    if (probeHits && probeHits.length > 0) {
+                        try {
+                            var probeText = probeHits[0];
+                            // Walk the chars [0, findDashIdx) and find
+                            // the contiguous bold run. We want:
+                            //   boldStart = first index whose fontStyle
+                            //               matches /bold|black|heavy/
+                            //   boldEnd   = findDashIdx (the run runs
+                            //               right up to the en-dash)
+                            var probeLen = 0;
+                            try { probeLen = probeText.characters.length; } catch (e) {}
+                            var boldStart = -1;
+                            var boldStyleSeen = null;
+                            for (var bsi = 0; bsi < findDashIdx && bsi < probeLen; bsi++) {
+                                var bsStyle = null;
+                                try { bsStyle = String(probeText.characters[bsi].fontStyle); } catch (e) {}
+                                if (bsStyle && /bold|black|heavy/i.test(bsStyle)) {
+                                    if (boldStart < 0) {
+                                        boldStart = bsi;
+                                        boldStyleSeen = bsStyle;
+                                    }
+                                } else if (boldStart >= 0) {
+                                    // Non-bold char appeared after a bold
+                                    // run — gaps mean this isn't the
+                                    // simple "bold up to the dash" pattern.
+                                    boldStart = -2;  // sentinel: invalid
+                                    break;
+                                }
+                            }
+                            // Capture post-dash style
+                            var postIdx = findDashIdx + EN_DASH_PAT.length;
+                            var postDashStyle = null;
+                            try { postDashStyle = String(probeText.characters[postIdx].fontStyle); } catch (e) {}
+                            var postIsRegular = postDashStyle && !/bold|black|heavy/i.test(postDashStyle);
+                            if (boldStart >= 0 && boldStyleSeen && postIsRegular) {
+                                // Map the bold run to the replace string.
+                                // The chars before the bold run are
+                                // identical in find and replace (the
+                                // edit's prefix), so boldStart maps 1:1.
+                                // Bold run in replace: [boldStart, replaceDashIdx)
+                                styleBoundary = {
+                                    boldStart: boldStart,
+                                    boldEnd: replaceDashIdx,
+                                    boldStyle: boldStyleSeen,
+                                    postDashStyle: postDashStyle
+                                };
+                            }
+                        } catch (e) {}
+                    }
+                }
+
+                app.findTextPreferences = NothingEnum.NOTHING;
+                app.changeTextPreferences = NothingEnum.NOTHING;
+                app.findTextPreferences.findWhat = find;
+                app.changeTextPreferences.changeTo = String(replace || "");
                 var hitsArr = [];
                 try {
                     hitsArr = searchScope.changeText();
@@ -2228,6 +2430,29 @@
                 app.changeTextPreferences = NothingEnum.NOTHING;
                 if (hits > 0) {
                     L("  replaced " + hits + " occurrence(s) of \"" + find + "\"");
+                    // Re-apply the captured bold→regular boundary on the
+                    // new text. Bold run in replace = [boldStart, boldEnd).
+                    // Pre-bold and post-dash regions are left alone
+                    // (whatever changeText produced for them is fine —
+                    // typically already regular since they were regular
+                    // in the find too). Per-char try/catch because some
+                    // fonts reject specific style names.
+                    if (styleBoundary) {
+                        app.findTextPreferences = NothingEnum.NOTHING;
+                        app.findTextPreferences.findWhat = String(replace || "");
+                        var newHits = [];
+                        try { newHits = searchScope.findText(); } catch (e) {}
+                        app.findTextPreferences = NothingEnum.NOTHING;
+                        for (var nh = 0; nh < newHits.length; nh++) {
+                            var nt = newHits[nh];
+                            for (var bci = styleBoundary.boldStart; bci < styleBoundary.boldEnd; bci++) {
+                                try { nt.characters[bci].fontStyle = styleBoundary.boldStyle; } catch (e) {}
+                            }
+                        }
+                        L("  REPLACE_TEXT: preserved bold boundary (chars " +
+                          styleBoundary.boldStart + "-" + (styleBoundary.boldEnd - 1) +
+                          " set to '" + styleBoundary.boldStyle + "')");
+                    }
                 }
 
                 // Tiered fallback chain when the literal find returns 0.
